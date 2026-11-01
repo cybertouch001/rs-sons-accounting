@@ -1,7 +1,7 @@
 {
   "name": "rs-sons-accounting",
   "productName": "R&S Sons Accounting",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "R&S Sons Accounting - GST accounting, inventory, ITR computation; desktop + multi-user server",
   "author": "R&S Sons",
   "main": "main.js",
@@ -30,6 +30,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "shell-preload.js",
       "core/**",
       "renderer/**",
       "assets/**",

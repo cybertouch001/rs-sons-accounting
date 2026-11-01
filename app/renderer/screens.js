@@ -15,7 +15,9 @@ function barChart(data, keys, colors = ['#1d5fa8', '#e0a526', '#0f8b8d']) {
 }
 
 SCREENS.dashboard = async (el) => {
-  const d = await C('dashboard', fyRange());
+  // v2.1: the three dashboard calls leave together (one trip to the server online)
+  const dP = C('dashboard', fyRange()); const rdP = C('recurringDue').catch(() => null); const ddP = C('dueDates', { days: 10, back: 0 }).catch(() => null);
+  const d = await dP;
   const s = APP.settings;
   const alerts = [];
   if (d.overdue) alerts.push(`<div class="alert red" data-go="report" data-p='${JSON.stringify({ r: 'outstanding', a: { kind: 'receivable', detail: true } })}'>⚠ ${d.overdue} customer bill${d.overdue > 1 ? 's' : ''} overdue — ₹${inr(d.overdueAmt, 0)} to collect${d.unadjustedCredits > 0.005 ? ` <small>(after ₹${inr(d.unadjustedCredits, 0)} on-account receipts)</small>` : ''}</div>`);
@@ -23,8 +25,8 @@ SCREENS.dashboard = async (el) => {
   if (d.expiring) alerts.push(`<div class="alert" data-go="report" data-p='${JSON.stringify({ r: 'batchStock' })}'>⏳ ${d.expiring} batches expired or expiring within 90 days</div>`);
   if (!s.gstin && s.gst_registered !== '0') alerts.push(`<div class="alert" data-go="companyEdit" data-p='{}'>ℹ Add your company GSTIN in Company Settings to print proper tax invoices</div>`);
   for (const r of d.reminders) alerts.push(`<div class="alert green" data-go="reminders" data-p='{}'>🔔 ${esc(r.title)}${r.due_date ? ' — due ' + U.fmtDate(r.due_date) : ''}</div>`);
-  try { const rd = await C('recurringDue'); if (rd.length) alerts.push(`<div class="alert" data-go="recurring" data-p='{}'>🔁 ${rd.length} recurring voucher${rd.length > 1 ? 's are' : ' is'} due (${esc(rd[0].name)}${rd.length > 1 ? '…' : ''}) — click to post</div>`); } catch (_) {}
-  try { const dd = (await C('dueDates', { days: 10, back: 0 })).slice(0, 4); for (const e of dd) alerts.push(`<div class="alert ${e.days <= 3 ? 'red' : ''}" data-go="dueDates" data-p='{}'>📅 ${esc(e.title)} — ${e.days === 0 ? 'due today' : 'due ' + U.fmtDate(e.date) + ' (' + e.days + ' days)'} · ${esc(e.detail)}</div>`); } catch (_) {}
+  try { const rd = await rdP; if (rd.length) alerts.push(`<div class="alert" data-go="recurring" data-p='{}'>🔁 ${rd.length} recurring voucher${rd.length > 1 ? 's are' : ' is'} due (${esc(rd[0].name)}${rd.length > 1 ? '…' : ''}) — click to post</div>`); } catch (_) {}
+  try { const dd = (await ddP).slice(0, 4); for (const e of dd) alerts.push(`<div class="alert ${e.days <= 3 ? 'red' : ''}" data-go="dueDates" data-p='{}'>📅 ${esc(e.title)} — ${e.days === 0 ? 'due today' : 'due ' + U.fmtDate(e.date) + ' (' + e.days + ' days)'} · ${esc(e.detail)}</div>`); } catch (_) {}
   if (!d.counts.vouchers) alerts.push(`<div class="alert green" data-go="help" data-p='{}'>👋 Welcome! Start with <b>Masters › Ledgers</b> (customers, suppliers, bank) and <b>Stock Items</b>, then press <b>F8</b> for a Sales Invoice. Press <b>Ctrl+H</b> for all shortcuts.</div>`);
   el.innerHTML = `<h2 class="title">Dashboard <small>${U.fmtDate(d.from)} to ${U.fmtDate(d.asOn)}</small><span style="flex:1"></span><button class="btn primary" id="qs">+ Sales Invoice <kbd>F8</kbd></button><button class="btn" id="qp">+ Purchase <kbd>F9</kbd></button><button class="btn" id="qr">+ Receipt <kbd>F6</kbd></button><button class="btn" id="qpay">+ Payment <kbd>F5</kbd></button></h2>
   <div class="kpis">

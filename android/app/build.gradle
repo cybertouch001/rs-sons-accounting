@@ -1,0 +1,31 @@
+apply plugin: 'com.android.application'
+// R&S Sons Accounting for Android — login-first app for the R&S Sons hosted server (same logins, roles and data as the Windows app).
+// Release signing: a properties file kept OUTSIDE the source tree (env RS_SIGNING_PROPS) with storeFile, storePassword, keyAlias,
+// keyPassword. Every future update MUST be signed with the same key, or Android refuses to install it over the old app.
+def ksFile = file(System.getenv('RS_SIGNING_PROPS') ?: '/nonexistent')
+android {
+    namespace 'bot.tab.sites.rssons'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'bot.tab.sites.rssons'
+        minSdk 23
+        targetSdk 34
+        versionCode 210
+        versionName '2.1.0'
+        buildConfigField 'boolean', 'WEB_DEBUG', (System.getenv('RS_WEBDEBUG') == '1' ? 'true' : 'false')   // test builds only
+        buildConfigField 'String', 'SERVER', '"' + (System.getenv('RS_SERVER') ?: 'https://rs-sons-accounting.sites.tab.bot') + '"'
+    }
+    signingConfigs {
+        release {
+            if (ksFile.exists()) {
+                def p = new Properties(); ksFile.withInputStream { p.load(it) }
+                def sf = new File(p['storeFile']); if (!sf.isAbsolute()) sf = new File(ksFile.parentFile, p['storeFile']); storeFile sf; storePassword p['storePassword']; keyAlias p['keyAlias']; keyPassword p['keyPassword']
+            }
+        }
+    }
+    buildFeatures { buildConfig true }
+    buildTypes {
+        release { if (ksFile.exists()) signingConfig signingConfigs.release; minifyEnabled false }
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}

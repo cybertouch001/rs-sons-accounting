@@ -12,12 +12,19 @@ const can = r => APP.user && ROLE_RANK[APP.user.role] >= ROLE_RANK[r];
 
 // ---------- theme & branding (set by the admin in Admin Settings; applied on every screen) ----------
 const DARK_MQ = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+function themeOverride() { try { return localStorage.getItem('rs.theme') || ''; } catch (_) { return ''; } }
 function applyTheme(t) {
   APP.theme = t || 'light';
-  const dark = APP.theme === 'dark' || (APP.theme === 'system' && DARK_MQ && DARK_MQ.matches);
+  const eff = themeOverride() || APP.theme;    // v2.1: this device's own dark / light choice (🌓) wins over the admin's default
+  const dark = eff === 'dark' || (eff === 'system' && DARK_MQ && DARK_MQ.matches);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
 }
-if (DARK_MQ && DARK_MQ.addEventListener) DARK_MQ.addEventListener('change', () => { if (APP.theme === 'system') applyTheme('system'); });
+if (DARK_MQ && DARK_MQ.addEventListener) DARK_MQ.addEventListener('change', () => { if ((themeOverride() || APP.theme) === 'system') applyTheme(APP.theme); });
+function toggleTheme() {
+  const dark = document.documentElement.dataset.theme === 'dark';
+  try { localStorage.setItem('rs.theme', dark ? 'light' : 'dark'); } catch (_) {}
+  applyTheme(APP.theme); toast(dark ? 'Light mode' : 'Dark mode', 'ok');
+}
 function appName() { return (APP.info && APP.info.name) || 'R&S Sons Accounting'; }
 function brandImg() { return (APP.info && APP.info.iconUrl) || '../assets/logo.png'; }
 function applyBrand() {
@@ -180,38 +187,108 @@ function setTop() {
   $('#sinfo').textContent = `Data: ${APP.info.dataDir}`;
 }
 async function enterCompany(info) {
-  APP.info = await api('app.info'); APP.settings = info.settings; invalidate();
+  invalidate(); const cacheP = loadCache(true);       // v2.1: app info + all master lists in one trip
+  APP.info = await api('app.info'); APP.settings = info.settings;
   const fyl = info.fyList; APP.date = U.today(); APP.fy = fyl.find(f => f.start === U.fyOf(APP.date).start) || fyl[0];
   if (APP.fy && (APP.date < APP.fy.start || APP.date > APP.fy.end)) APP.date = APP.fy.end;
   $('#login').classList.add('hidden'); $('#companies').classList.add('hidden'); $('#app').classList.remove('hidden');
-  applyBrand(); buildNav(); setTop(); APP.stack = []; APP.current = null; await loadCache(true); go('dashboard');
+  applyBrand(); buildNav(); setTop(); APP.stack = []; APP.current = null; await cacheP; go('dashboard');
 }
 async function refreshCompany() { const info = await api('company.info'); APP.settings = info.settings; APP.info.company = info; setTop(); }
 
 // ---------- login & company select ----------
-async function showLogin() {
-  APP.info = await api('app.info'); applyBrand();
-  $('#app').classList.add('hidden'); $('#companies').classList.add('hidden'); $('#login').classList.remove('hidden');
-  $('#lver').textContent = `Version ${APP.info.version}`; $('#lp').value = '';
-  $('#lhint').classList.toggle('hidden', !APP.info.firstRun);
-  const sb = $('#lserver'); if (sb) { sb.classList.toggle('hidden', !!APP.info.server || !APP.info.canConnectServer); sb.onclick = connectServerDialog; }
-  const wm = $('#lweb'); if (wm) { wm.classList.toggle('hidden', !APP.info.server); wm.textContent = APP.info.server ? 'Multi-user server · ' + location.host : ''; } if (!APP.info.firstRun && $('#lu').value === 'admin' && !APP.loginTouched) $('#lu').value = '';
-  setTimeout(() => { if (!$('#lu').value) $('#lu').focus(); }, 60); setTimeout(() => $('#lp').focus(), 50);
+// v2.1 login-first: the same login screen serves the Windows app (online mode = the built-in hosted server, or offline mode
+// = files on this PC), the Android app and the browser. Where it runs decides the small links under the form.
+function loginCtx() { if (window.rs && window.rs.android) return 'android'; if (window.rs && window.rs.shell) return 'shell'; return APP.info && APP.info.server ? 'web' : 'local'; }
+function lastUser() { try { return localStorage.getItem('rs.lastUser') || ''; } catch (_) { return ''; } }
+function setConn(state, text) {
+  const c = $('#lconn'); if (!c) return;
+  c.classList.toggle('hidden', !state); c.dataset.state = state || '';
+  $('#lconnt').textContent = text || ''; $('#lretry').classList.toggle('hidden', state !== 'fail');
+  $('#lbtn').disabled = state === 'wait';
 }
+function paintLoginExtras() {
+  const ctx = loginCtx(); const info = APP.info || {};
+  const mode = $('#lmode'); const alt = $('#lalt'); const rem = $('#lremw'); const sb = $('#lserver');
+  let modeHtml = '', altHtml = '';
+  if (ctx === 'local') {
+    modeHtml = '💻 <b>Offline mode</b> — sirf is PC pe · data on this PC only';
+    altHtml = '<a href="#" id="ladv">Advanced: apna server</a>';
+  } else if (ctx === 'shell') {
+    const custom = window.rs.shell.custom;
+    modeHtml = '☁ <b>Online</b> — ek baar login, data har jagah · login once, data everywhere' + (custom ? `<small>Server: ${esc(window.rs.shell.server || location.host)}</small>` : '');
+    altHtml = '<a href="#" id="loffline">💻 Offline mode (sirf is PC pe)</a><span>·</span><a href="#" id="ladv">Advanced: apna server</a>' + (custom ? '<span>·</span><a href="#" id="ldefsrv">Default server pe wapas</a>' : '');
+  } else if (ctx === 'android') {
+    modeHtml = '☁ <b>Online</b> — ek baar login, data har jagah · login once, data everywhere';
+  } else {
+    modeHtml = '☁ Online · ' + esc(location.host);
+    altHtml = '<a href="../" id="lapps">📲 Windows / Android app download</a>';
+  }
+  mode.innerHTML = modeHtml; mode.classList.toggle('hidden', !modeHtml);
+  alt.innerHTML = altHtml; alt.classList.toggle('hidden', !altHtml);
+  rem.classList.toggle('hidden', ctx !== 'web');
+  if (sb) { sb.classList.toggle('hidden', ctx !== 'local' || !info.canConnectServer); sb.onclick = () => api('app.useCloud').catch(fail); }
+  const on = (id, fn) => { const el = $('#' + id); if (el) el.onclick = e => { e.preventDefault(); fn(); }; };
+  on('ladv', connectServerDialog);
+  on('loffline', () => window.rs.shell.offline());
+  on('ldefsrv', () => window.rs.shell.resetServer());
+  const wm = $('#lweb'); if (wm) wm.classList.add('hidden');
+}
+async function showLogin(info, keepTyped) {
+  APP.info = info || await api('app.info'); applyBrand();
+  $('#app').classList.add('hidden'); $('#companies').classList.add('hidden'); $('#login').classList.remove('hidden');
+  $('#lver').textContent = `Version ${APP.info.version}`; if (!keepTyped) $('#lp').value = ''; $('#lerr').textContent = ''; setConn(null);
+  $('#lhint').classList.toggle('hidden', !APP.info.firstRun);
+  if (APP.info.firstRun && !$('#lu').value) $('#lu').value = 'admin';
+  paintLoginExtras();
+  const typed = keepTyped && ($('#lp').value || document.activeElement === $('#lu') || document.activeElement === $('#lp'));
+  if (!typed) {
+    const lu = loginCtx() !== 'local' ? lastUser() : ''; if (lu && !APP.loginTouched && !APP.info.firstRun) $('#lu').value = lu;   // offline mode: unchanged (no remembered user)
+    setTimeout(() => { if (!$('#lu').value) $('#lu').focus(); else $('#lp').focus(); }, 60);
+  }
+}
+function loginErrorText(err) {
+  const code = err && err.code;
+  if (code === 'bad_login') return 'Galat username ya password. (Wrong username or password.)';
+  if (code === 'rate_limited') return 'Bahut baar galat password — thoda ruko. ' + err.message;
+  return (err && err.message) || String(err);
+}
+$('#lpeye').onclick = () => { const p = $('#lp'); p.type = p.type === 'password' ? 'text' : 'password'; p.focus(); };
 $('#loginForm').addEventListener('submit', async e => {
-  e.preventDefault(); $('#lerr').textContent = ''; APP.loginTouched = true;
+  e.preventDefault(); if ($('#lbtn').disabled) return;
+  $('#lerr').textContent = ''; APP.loginTouched = true;
+  const u = $('#lu').value.trim(), p = $('#lp').value;
+  if (!u || !p) { $('#lerr').textContent = 'Username aur password dono likho. (Enter username and password.)'; return; }
+  const ctx = loginCtx(); const remember = ctx === 'shell' || ctx === 'android' || (ctx === 'web' && $('#lrem').checked);
+  const btn = $('#lbtn'); const label = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Logging in…';
   try {
-    APP.user = await api('auth.login', $('#lu').value.trim(), $('#lp').value); APP.lastPw = $('#lp').value;
+    APP.user = await api('auth.login', u, p, { remember }); APP.lastPw = p;
+    if (loginCtx() !== 'local') { try { localStorage.setItem('rs.lastUser', APP.user.username); } catch (_) {} }
+    btn.disabled = false; btn.innerHTML = label;
     if (APP.user.mustChange) { const ok = await changePassword(true); APP.lastPw = null; if (!ok) { await api('auth.logout').catch(() => {}); return; } APP.user.mustChange = false; }
     APP.lastPw = null;
-    showCompanies();
-  } catch (err) { $('#lerr').textContent = err.message; }
+    await showCompanies();
+  } catch (err) { $('#lerr').textContent = loginErrorText(err); }
+  finally { btn.disabled = false; btn.innerHTML = label; }
 });
 async function connectServerDialog() {
-  const v = await promptBox('Connect to a multi-user server', [{ k: 'url', label: 'Server address (from your admin)', w: 2, help: 'e.g. https://rs-sons-accounting.sites.tab.bot or http://192.168.1.10:8080' }], { url: APP.info.serverUrl || '' });
+  const shell = window.rs && window.rs.shell;
+  const v = await promptBox('Advanced: apna server (your own server)', [{ k: 'url', label: 'Server address', w: 2, help: 'Sirf tab jab aapka apna R&S Sons server ho · e.g. http://192.168.1.10:8080 or https://accounts.example.com' }], { url: (shell ? (shell.custom ? shell.server : '') : APP.info.serverUrl) || '' });
   if (!v || !v.url) return;
-  try { await api('app.setServer', v.url.trim()); } catch (e) { fail(e); }
+  try { if (shell) await shell.setServer(v.url.trim()); else await api('app.setServer', v.url.trim()); } catch (e) { fail(e); }
 }
+// Android back button (and any "go back" request from the app shell): true = handled here, false = let the app close
+window.rsBack = function () {
+  const dv = document.getElementById('docview'); if (dv && !dv.classList.contains('hidden')) { const c = dv.querySelector('.dv-c'); if (c) c.click(); return true; }
+  if (!$('#combo').classList.contains('hidden')) { hideCombo(); return true; }
+  if (isModal()) { closeModal(null); return true; }
+  if ($('#nav').classList.contains('open')) { $('#nav').classList.remove('open'); return true; }
+  if (!$('#app').classList.contains('hidden')) {
+    if (APP.stack.length || (APP.current && APP.current.name !== 'dashboard')) { back(); return true; }
+    showCompanies(); return true;
+  }
+  return false;
+};
 // File picker usable from every screen (desktop and browser): resolves { name, size, b64, dataUrl, file } or null
 function pickFile(accept) {
   if (window.rs && window.rs.pickFile) return window.rs.pickFile(accept);
@@ -234,6 +311,16 @@ async function showCompanies() {
   card.innerHTML = `<div class="brand"><img class="brand-img" src="${esc(brandImg())}"><div><h1>Select Company</h1><div>Logged in as ${esc(APP.user.username)} (${esc(APP.user.role)}) · data folder: ${esc(APP.info.dataDir)}</div></div></div>
     <div class="comp-list" id="clist">${list.length ? list.map((c, i) => `<div class="comp-row ${i === 0 ? 'sel' : ''}" data-id="${c.id}" tabindex="0"><div><b>${esc(c.name)}</b><div style="font-size:11.5px;color:var(--muted)">${c.gstin ? 'GSTIN ' + esc(c.gstin) + ' · ' : ''}${c.lastOpened ? 'last opened ' + U.fmtDate(c.lastOpened.slice(0, 10)) : 'never opened'} · ${(c.size / 1024).toFixed(0)} KB</div></div>${can('admin') ? `<button class="btn sm danger" data-del="${c.id}">Delete</button>` : ''}</div>`).join('') : '<div style="padding:20px;text-align:center;color:var(--muted)">No company yet. Create your first company to start.</div>'}</div>
     <div class="toolbar">${can('admin') ? '<button class="btn primary" id="cnew">+ Create Company <kbd>Alt+C</kbd></button><button class="btn" id="crestore">Restore from Backup</button><button class="btn" id="cdemo">Create Demo Company</button>' : ''}<span class="sp"></span>${can('admin') ? '<button class="btn" id="cadmin" title="Password, username, app name, icon, theme">⚙ Admin Settings</button>' : ''}<button class="btn" id="clogout">Logout</button>${APP.info.server ? '' : '<button class="btn" id="cquit">Exit</button>'}</div>`;
+  // v2.1 Android: optional app lock with the phone's fingerprint / PIN
+  const droid = window.rs && window.rs.android;
+  if (droid && droid.lockState) {
+    let st = {}; try { st = JSON.parse(droid.lockState() || '{}'); } catch (_) {}
+    const tb = $('.toolbar', card); const b = document.createElement('button'); b.className = 'btn'; b.id = 'clock';
+    const paintLock = on => { b.textContent = on ? '🔒 App lock: ON' : '🔓 App lock: OFF'; b.title = 'Fingerprint / phone PIN se app kholo'; };
+    paintLock(!!st.on); b.onclick = () => droid.setLock(!/ON/.test(b.textContent));
+    window.rsLockChanged = on => paintLock(!!on);
+    tb.insertBefore(b, $('#clogout', card));
+  }
   $$('.comp-row', card).forEach(r => { r.onclick = e => { if (e.target.dataset.del) return; openComp(r.dataset.id); }; r.onkeydown = e => { if (e.key === 'Enter') openComp(r.dataset.id); if (e.key === 'ArrowDown' && r.nextElementSibling) r.nextElementSibling.focus(); if (e.key === 'ArrowUp' && r.previousElementSibling) r.previousElementSibling.focus(); }; });
   $$('[data-del]', card).forEach(b => b.onclick = async e => { e.stopPropagation(); try { if (await api('company.delete', b.dataset.del)) showCompanies(); } catch (er) { fail(er); } });
   if ($('#cnew')) { $('#cnew').onclick = () => createCompanyDialog(); $('#crestore').onclick = async () => { try { const r = await api('company.restore'); if (r) { toast('Restored as "' + r.name + '"', 'ok'); showCompanies(); } } catch (e) { fail(e); } }; $('#cdemo').onclick = createDemo; }
@@ -279,6 +366,7 @@ document.addEventListener('keydown', async e => {
   if (k === 'F2') { e.preventDefault(); $('#tdate').focus(); return; }
   if (e.ctrlKey && k.toLowerCase() === 'f') { e.preventDefault(); go('voucherList', {}); return; }
   if (e.ctrlKey && k.toLowerCase() === 'h') { e.preventDefault(); go('help'); return; }
+  if (e.ctrlKey && k.toLowerCase() === 'k') { e.preventDefault(); quickSearch(); return; }
   if (e.altKey) {
     const m = { d: ['dashboard'], l: ['ledgerList'], i: ['itemList'], b: ['report', { r: 'dayBook' }], t: ['report', { r: 'trialBalance' }], p: ['report', { r: 'profitLoss' }], s: ['report', { r: 'balanceSheet' }], o: ['report', { r: 'outstanding', a: { kind: 'receivable' } }], r: ['reportsMenu'], u: ['utilities'] }[k.toLowerCase()];
     if (m && !(APP.current && APP.current.name === 'voucher' && ['p'].includes(k.toLowerCase()))) { e.preventDefault(); go(m[0], m[1] || {}); return; }
@@ -294,6 +382,50 @@ async function quickCreate() {
 $('#tfy').onchange = () => { APP.fy = APP.info.company.fyList.find(f => f.start === $('#tfy').value); if (APP.date < APP.fy.start || APP.date > APP.fy.end) { APP.date = U.today() >= APP.fy.start && U.today() <= APP.fy.end ? U.today() : APP.fy.end; $('#tdate').value = APP.date; } render(); };
 $('#tdate').onchange = () => { if (!$('#tdate').value) return; APP.date = $('#tdate').value; const fy = U.fyOf(APP.date); const f = APP.info.company.fyList.find(x => x.start === fy.start); if (f) { APP.fy = f; $('#tfy').value = f.start; } else toast('Date is outside the financial years of this company', 'err'); };
 $('#tcomp').onclick = () => showCompanies();
+// ---------- v2.1 quick search (🔍 / Ctrl+K): party, item, invoice no., amount, narration ----------
+async function quickSearch() {
+  if (!APP.info || !APP.info.company) return;
+  await loadCache().catch(() => {});
+  let seq = 0, timer = null;
+  const vt = t => (APP.info.company.vtypes[t] || { name: t }).name;
+  const r = await modal(`<h3>🔍 Search <small style="font-weight:400;color:var(--muted)">party · invoice no. · amount · item</small></h3>
+    <div class="fld"><input id="qsq" placeholder="e.g. Sharma, INV/12, 4500" autocomplete="off" style="font-size:15px;padding:9px"></div>
+    <div id="qsr" class="qs-res"><div class="qs-hint">Type at least 2 letters or digits</div></div>
+    <div class="actions"><button class="btn" data-a="no">Close (Esc)</button></div>`, (box, close) => {
+    $('[data-a=no]', box).onclick = () => close(null);
+    const out = $('#qsr', box), inp = $('#qsq', box);
+    const paint = (ledgers, items, vouchers, busy) => {
+      const rows = [];
+      for (const l of ledgers) rows.push(`<div class="qs-row" data-k="l" data-id="${l.id}"><span class="qs-t">👤 ${esc(l.name)}</span><small>${esc(l.group_name || '')}${l.gstin ? ' · ' + esc(l.gstin) : ''}</small></div>`);
+      for (const i of items) rows.push(`<div class="qs-row" data-k="i" data-id="${i.id}"><span class="qs-t">📦 ${esc(i.name)}</span><small>₹${inr(i.sale_rate || 0)}${i.hsn ? ' · HSN ' + esc(i.hsn) : ''}</small></div>`);
+      for (const v of vouchers) rows.push(`<div class="qs-row" data-k="v" data-id="${v.id}"><span class="qs-t">🧾 ${esc(vt(v.vtype))} ${esc(v.number || '')}</span><small>${U.fmtDate(v.date)} · ${esc(v.party_name || v.narration || '')} · ₹${inr(v.total)}</small></div>`);
+      out.innerHTML = rows.join('') + (busy ? '<div class="qs-hint"><span class="spin"></span> Searching invoices…</div>' : rows.length ? '' : '<div class="qs-hint">Kuch nahi mila · nothing found</div>');
+      $$('.qs-row', out).forEach(d => d.onclick = () => close({ k: d.dataset.k, id: +d.dataset.id }));
+    };
+    inp.oninput = () => {
+      const q = inp.value.trim(); clearTimeout(timer); const my = ++seq;
+      if (q.length < 2) { out.innerHTML = '<div class="qs-hint">Type at least 2 letters or digits</div>'; return; }
+      const ql = q.toLowerCase();
+      const ledgers = (APP.cache.ledgers || []).filter(l => (l.name + ' ' + (l.alias || '') + ' ' + (l.gstin || '') + ' ' + (l.phone || '')).toLowerCase().includes(ql)).slice(0, 8);
+      const items = (APP.cache.items || []).filter(i => (i.name + ' ' + (i.code || '') + ' ' + (i.barcode || '') + ' ' + (i.alias || '')).toLowerCase().includes(ql)).slice(0, 5);
+      paint(ledgers, items, [], true);
+      timer = setTimeout(async () => {
+        let vs = []; try { vs = await C('vouchers', { q: q.replace(/[₹,]/g, ''), limit: 400 }); } catch (_) {}
+        if (my !== seq) return;
+        vs = vs.slice(-25).reverse();     // newest first
+        paint(ledgers, items, vs, false);
+      }, 250);
+    };
+    inp.onkeydown = e => { if (e.key === 'Enter') { const f = $('.qs-row', out); if (f) f.click(); } };
+  });
+  if (!r) return;
+  if (r.k === 'v') go('voucher', { id: r.id });
+  else if (r.k === 'l') go('report', { r: 'ledgerStatement', a: { ledger_id: r.id } });
+  else if (r.k === 'i') go('itemEdit', { id: r.id });
+}
+$('#tsearch').onclick = () => quickSearch();
+$('#ttheme').onclick = () => toggleTheme();
+
 $('#tmenu').onclick = (e) => { e.stopPropagation(); $('#nav').classList.toggle('open'); };
 document.addEventListener('click', e => { const n = $('#nav'); if (n.classList.contains('open') && (!n.contains(e.target) || e.target.closest('a'))) n.classList.remove('open'); });
 $('#tlogout').onclick = async () => { await api('auth.logout'); APP.user = null; showLogin(); };
@@ -305,12 +437,25 @@ function money(n) { n = Number(n) || 0; return `<span class="${n < 0 ? 'neg' : '
 function vtName(t) { return APP.info.company.vtypes[t].name; }
 async function withBusy(btn, fn) { const t = btn && btn.innerHTML; if (btn) { btn.disabled = true; btn.innerHTML = 'Working…'; } try { return await fn(); } catch (e) { fail(e); } finally { if (btn) { btn.disabled = false; btn.innerHTML = t; } } }
 window.addEventListener('DOMContentLoaded', () => {});
-// Start: in a browser an existing login (cookie) goes straight back to where the user was.
+// Start: an existing login (cookie / app session) goes straight back to where the user was. Online, the first call can be
+// slow (no internet, or the server waking up) — the login card shows "Connecting…" with Retry instead of a blank window.
 async function startApp() {
+  let info = null;
+  const online = !!(window.rs && window.rs.web);
+  if (online) {
+    $('#login').classList.remove('hidden'); paintLoginExtras(); setConn('wait', 'Connecting… · जुड़ रहा है');
+    const slow = setTimeout(() => { if ($('#lconn').dataset.state === 'wait') setConn('wait', 'Server jag raha hai… pehli baar 10-30 sec lag sakte hain · Server is waking up'); }, 6000);
+    try { info = await api('app.info'); } catch (e) { clearTimeout(slow); setConn('fail', e.message); $('#lretry').onclick = () => { setConn('wait', 'Connecting… · जुड़ रहा है'); startApp(); }; return; }
+    clearTimeout(slow); setConn(null);
+  }
   try {
-    const info = await api('app.info');
-    if (info.server && info.user && !info.user.mustChange) { APP.info = info; APP.user = info.user; if (info.company) { await enterCompany(info.company); return; } await showCompanies(); return; }
+    if (!info) info = await api('app.info');
+    if (info.server && info.user && !info.user.mustChange) {
+      APP.info = info; APP.user = info.user;
+      if (info.company) { try { await enterCompany(info.company); return; } catch (_) {} }
+      await showCompanies(); return;
+    }
   } catch (_) {}
-  showLogin();
+  showLogin(info || undefined, true).catch(e => { setConn('fail', e.message); $('#lretry').onclick = () => startApp(); });
 }
 setTimeout(startApp, 0);

@@ -4,3 +4,9 @@ data/
 .env
 *.log
 private/
+build/
+.gradle/
+local.properties
+*.jks
+*.keystore
+signing.properties

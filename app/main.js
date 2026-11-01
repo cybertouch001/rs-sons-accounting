@@ -4,6 +4,9 @@ const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeImage, nativeThe
 const path = require('path'), fs = require('fs'), crypto = require('crypto'), os = require('os');
 const APP_NAME = 'R&S Sons Accounting'; // default display name; the admin can rename the app (Admin Settings) — see appName()
 const VERSION = require('./package.json').version;
+// v2.1 login-first: the app opens on the login screen of the built-in hosted server (online: one login, the same data on every
+// PC and phone). "Offline mode" (files on this PC, exactly as before) and "Advanced: apna server" stay one click away.
+const DEFAULT_SERVER = 'https://rs-sons-accounting.sites.tab.bot';
 let SQL, win, dataDir, sys;
 
 // ---------------- startup safety: crash log + friendly error instead of a silent exit ----------------
@@ -53,6 +56,7 @@ process.on('unhandledRejection', (e) => { startupLog('unhandledRejection: ' + (e
 startupLog(`starting ${APP_NAME} ${VERSION} · electron ${process.versions.electron} · ${process.platform} ${os.release()} ${process.arch}` + (process.env.PORTABLE_EXECUTABLE_DIR ? ' · portable' : '') + ` · exe ${process.execPath}`);
 // An accounting app needs no GPU; software rendering avoids the blank/white window and GPU-process crashes
 // seen on old Windows PCs with bad graphics drivers (and inside VMs / Wine).
+if (process.env.RS_USER_DATA) { try { app.setPath('userData', process.env.RS_USER_DATA); } catch (_) {} }   // tests: a separate login store
 if (process.env.RS_GPU !== '1') { try { app.disableHardwareAcceleration(); } catch (_) {} }
 
 let initSqlJs, XLSX, QRCode, core, PR, U, ADM;
@@ -201,7 +205,7 @@ const { READ, WRITE, ADMIN } = require('./core/perms');
 const DOCS = require('./core/docs'), XB = require('./core/exports');
 
 const H = {
-  'app.info': () => ({ canConnectServer: true, serverUrl: (sys && sys.lastServerUrl) || '', firstRun: !!(sys && sys.users.some(u => u.mustChange && u.username === 'admin')), name: appName(), defaultName: APP_NAME, theme: themeSetting(), iconUrl: iconDataUrl(), version: VERSION, dataDir, platform: process.platform, user: S.user && { username: S.user.username, role: S.user.role, mustChange: !!S.user.mustChange }, company: companyInfo() }),
+  'app.info': () => ({ canConnectServer: true, serverUrl: (sys && sys.cloudServer) || '', cloudServer: cloudServer(), firstRun: !!(sys && sys.users.some(u => u.mustChange && u.username === 'admin')), name: appName(), defaultName: APP_NAME, theme: themeSetting(), iconUrl: iconDataUrl(), version: VERSION, dataDir, platform: process.platform, user: S.user && { username: S.user.username, role: S.user.role, mustChange: !!S.user.mustChange }, company: companyInfo() }),
   'auth.login': (username, pw) => {
     const key = String(username || '').toLowerCase(); const f = S.failed[key] || { n: 0, until: 0 };
     if (f.until > Date.now()) throw new Error(`Too many wrong attempts. Try again in ${Math.ceil((f.until - Date.now()) / 1000)} s.`);
@@ -354,16 +358,8 @@ const H = {
   'file.rows': (f) => { if (!f || !f.b64) throw new Error('Choose a file'); return XB.sheetRows(XLSX, Buffer.from(f.b64, 'base64')); },
   'doc.named': async (kind, id, opts = {}) => docHtml(kind, id, opts),
   // v2.0: use a multi-user server instead of the files on this PC (Ctrl+Shift+L returns to local mode)
-  'app.setServer': async (url) => {
-    let u; try { u = new URL(String(url || '').trim()); } catch (_) { throw new Error('Enter the full address, e.g. https://example.com or http://192.168.1.10:8080'); }
-    if (!/^https?:$/.test(u.protocol)) throw new Error('Address must start with https:// (or http:// on your own office network)');
-    const base = u.origin + u.pathname.replace(/\/(app\/?)?$/, '').replace(/\/$/, '');
-    let ok = false; try { const r = await net.fetch(base + '/api/health'); const j = await r.json(); ok = j && j.app === 'rs-sons-accounting'; } catch (_) {}
-    if (!ok) throw new Error('No R&S Sons Accounting server answered at ' + base + '. Check the address and your internet.');
-    closeCompany(); S.user = null; sys.serverUrl = base; sys.lastServerUrl = base; saveSys();
-    setTimeout(() => { const old = win; createWindow(); if (old && !old.isDestroyed()) old.destroy(); }, 50);
-    return true;
-  },
+  'app.setServer': async (url) => { const base = await checkServer(url); setTimeout(() => switchMode('cloud', base), 50); return true; },
+  'app.useCloud': async () => { setTimeout(() => switchMode('cloud'), 50); return true; },
   'shell.open': (p) => { if (!String(p).startsWith(dataDir) && !String(p).startsWith(app.getPath('documents'))) throw new Error('Not allowed'); return shell.openPath(p); },
   'shell.show': (p) => { shell.showItemInFolder(p); return true; },
   'shell.external': (url) => { if (!/^(https:|mailto:)/.test(url)) throw new Error('Not allowed'); shell.openExternal(url); return true; },
@@ -392,29 +388,104 @@ ipcMain.handle('api', async (e, method, args) => {
 });
 
 function iconPath() { const p = path.join(__dirname, 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'); return fs.existsSync(p) ? p : undefined; }
-function backToLocal(reason) {
-  sys.serverUrl = null; saveSys(); startupLog('server mode off: ' + reason);
-  const old = win; createWindow(); if (old && !old.isDestroyed()) old.destroy();
+// ---------------- v2.1 modes: 'cloud' (login to a server; default) or 'local' (offline, files on this PC) ----------------
+function startMode() {
+  if (process.env.RS_START_MODE === 'local' || process.env.RS_START_MODE === 'cloud') return process.env.RS_START_MODE;   // tests / support
+  return sys.mode === 'local' ? 'local' : 'cloud';
+}
+function migrateMode() {
+  if (sys.mode) return;
+  // v2.0 "connected to a server" keeps that server; everyone else (new install, or v2.0 local data) opens on the online login.
+  // Local company files are never touched: Offline mode opens them exactly as before.
+  if (sys.serverUrl) sys.cloudServer = sys.serverUrl.replace(/\/$/, '') === DEFAULT_SERVER ? null : sys.serverUrl;
+  sys.mode = 'cloud'; delete sys.serverUrl; saveSys();
+}
+function cloudServer() { return (sys && sys.cloudServer) || process.env.RS_SERVER || DEFAULT_SERVER; }
+async function checkServer(url) {
+  let u; try { u = new URL(String(url || '').trim()); } catch (_) { throw new Error('Pura address likho, jaise https://example.com ya http://192.168.1.10:8080 (Enter the full address).'); }
+  if (!/^https?:$/.test(u.protocol)) throw new Error('Address https:// se shuru hona chahiye (ya office network pe http://). Address must start with https://');
+  const base = u.origin + u.pathname.replace(/\/(app\/?)?$/, '').replace(/\/$/, '');
+  let ok = false; try { const r = await net.fetch(base + '/api/health', { signal: AbortSignal.timeout(20000) }); const j = await r.json(); ok = j && j.app === 'rs-sons-accounting'; } catch (_) {}
+  if (!ok) throw new Error('Is address pe R&S Sons Accounting server nahi mila: ' + base + ' (No R&S Sons Accounting server answered. Check the address and your internet.)');
+  return base;
+}
+function switchMode(mode, server) {
+  if (mode === 'cloud' && server !== undefined) sys.cloudServer = server && server.replace(/\/$/, '') !== DEFAULT_SERVER ? server : null;
+  if (mode === 'local') { /* the online session stays saved: switching back to Online needs no new login */ } else { closeCompany(); S.user = null; }
+  sys.mode = mode; saveSys(); startupLog('mode: ' + mode + (mode === 'cloud' ? ' ' + cloudServer() : ''));
+  const old = win; process.env.RS_START_MODE = ''; createWindow(); if (old && !old.isDestroyed()) old.destroy();
+}
+function backToLocal(reason) { startupLog('offline mode: ' + reason); switchMode('local'); }
+const SHELL_PAGES = ['connecting.html', 'offline.html'];
+function shellSenderOk(e) {
+  try {
+    const u = new URL(e.senderFrame ? e.senderFrame.url : e.sender.getURL());
+    if (u.protocol === 'file:') return SHELL_PAGES.includes(path.basename(decodeURIComponent(u.pathname)));
+    return u.origin === new URL(cloudServer()).origin;
+  } catch (_) { return false; }
+}
+function uniqueFile(dir, name, ext) { fs.mkdirSync(dir, { recursive: true }); let f = path.join(dir, safeName(name) + '.' + ext), i = 2; while (fs.existsSync(f)) f = path.join(dir, `${safeName(name)} (${i++}).${ext}`); return f; }
+const SHELL = {
+  info: () => ({ desktop: true, version: VERSION, server: cloudServer(), custom: !!sys.cloudServer, defaultServer: DEFAULT_SERVER }),
+  offline: () => { setTimeout(() => backToLocal('user'), 30); return true; },
+  retry: () => { loadCloud(); return true; },
+  setServer: async (url) => { const base = await checkServer(url); setTimeout(() => switchMode('cloud', base), 30); return true; },
+  resetServer: () => { setTimeout(() => switchMode('cloud', null), 30); return true; },
+  saveFile: async (name, mime, b64) => {
+    const ext = (String(name).match(/\.([a-z0-9]{1,6})$/i) || [, 'bin'])[1]; const base = String(name).replace(/\.[a-z0-9]{1,6}$/i, '');
+    const r = process.env.RS_E2E && process.env.RS_E2E_SAVE_DIR ? { filePath: uniqueFile(process.env.RS_E2E_SAVE_DIR, base, ext) }   // tests: no dialog
+      : await dialog.showSaveDialog(win, { defaultPath: uniqueFile(paths().exports, base, ext), filters: [{ name: ext.toUpperCase(), extensions: [ext] }] });
+    if (r.canceled || !r.filePath) return null;
+    fs.writeFileSync(r.filePath, Buffer.from(String(b64 || ''), 'base64')); return { file: r.filePath };
+  },
+  savePdf: async (html, name, silent) => {
+    const file = uniqueFile(path.join(paths().pdf, 'Online'), name || 'Document', 'pdf');
+    fs.writeFileSync(file, await htmlToPdf(String(html || ''))); if (silent) shell.showItemInFolder(file); else previewPdf(file, name);
+    return { file };
+  },
+  print: async (html) => printHtml(String(html || '')),
+};
+ipcMain.handle('shell', async (e, method, args) => {
+  if (!shellSenderOk(e)) return { ok: false, error: 'Not allowed' };
+  try { const h = SHELL[method]; if (!h) throw new Error('Unknown ' + method); return { ok: true, data: await h(...(args || [])) }; }
+  catch (err) { return { ok: false, error: err && err.message || String(err) }; }
+});
+ipcMain.on('shell-info', (e) => { e.returnValue = shellSenderOk(e) ? SHELL.info() : null; });
+function loadCloud() {
+  if (!win || win.isDestroyed()) return;
+  const server = cloudServer();
+  win.loadFile(path.join(__dirname, 'renderer', 'connecting.html'), { query: { server } }).catch(() => {})
+    .then(() => { if (win && !win.isDestroyed()) win.loadURL(server + '/app/').catch(() => {}); });
+}
+function createCloudWindow() {
+  const server = cloudServer(); const origin = new URL(server).origin;
+  win = new BrowserWindow({ width: 1366, height: 820, minWidth: 1000, minHeight: 640, title: appName() + ' — Online', icon: windowIcon(), show: false, backgroundColor: '#0b2545',
+    webPreferences: { preload: path.join(__dirname, 'shell-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } });
+  Menu.setApplicationMenu(null);
+  let shown = false; const showWin = () => { if (shown || !win || win.isDestroyed() || process.env.RS_HIDDEN) return; shown = true; win.maximize(); win.show(); };
+  win.once('ready-to-show', showWin); setTimeout(showWin, 4000);
+  const local = url => url.startsWith('file:') && SHELL_PAGES.some(p => url.split('?')[0].endsWith('/renderer/' + p));
+  win.webContents.setWindowOpenHandler(({ url }) => { if (/^(https:|mailto:|whatsapp:)/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+  win.webContents.on('will-navigate', (e, url) => { let o = ''; try { o = new URL(url).origin; } catch (_) {} if (o === origin || local(url)) return; e.preventDefault(); if (/^(https:|mailto:)/.test(url)) shell.openExternal(url); });
+  win.webContents.on('did-fail-load', (e, code, desc, url, isMain) => {
+    if (!isMain || code === -3 || local(url)) return; startupLog(`server load failed ${code} ${desc}`);
+    win.loadFile(path.join(__dirname, 'renderer', 'offline.html'), { query: { server, code: String(code), desc: String(desc || '') } }).catch(() => {});
+  });
+  win.webContents.session.on('will-download', (e, item) => { try { item.setSavePath(uniqueFile(paths().exports, item.getFilename().replace(/\.[^.]+$/, ''), (item.getFilename().match(/\.([^.]+)$/) || [, 'bin'])[1])); } catch (_) {} });
+  win.webContents.on('before-input-event', async (e, input) => {
+    if (input.type !== 'keyDown') return;
+    if (input.control && input.shift && input.key === 'F12') win.webContents.openDevTools({ mode: 'detach' });
+    if (input.control && input.shift && input.key.toLowerCase() === 'l') { const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Cancel', 'Offline mode'], defaultId: 1, message: 'Offline mode kholein? (sirf is PC ki files) · Switch to offline mode (company files on this PC)?' }); if (r.response === 1) backToLocal('user'); }
+  });
+  let crashes = 0;
+  win.webContents.on('render-process-gone', (e, d) => { startupLog(`screen process ended: ${d.reason}`); if (d.reason !== 'clean-exit' && win && !win.isDestroyed() && ++crashes <= 3) loadCloud(); });
+  win.on('page-title-updated', e => e.preventDefault());
+  loadCloud();
 }
 function createWindow() {
-  const server = sys && sys.serverUrl;
-  win = new BrowserWindow({ width: 1366, height: 820, minWidth: 1000, minHeight: 640, title: appName() + (server ? ' — ' + server : ''), icon: windowIcon(), show: false, backgroundColor: '#0b2545',
-    webPreferences: server ? { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } : { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } });
-  if (server) {
-    // Multi-user mode: the window shows the server's web app (no access to this PC's files); everything is saved on the server.
-    Menu.setApplicationMenu(null); win.once('ready-to-show', () => { win.maximize(); win.show(); });
-    win.loadURL(server + '/app/').catch(() => {});
-    win.webContents.setWindowOpenHandler(({ url }) => { if (/^(https:|mailto:)/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
-    win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(server)) { e.preventDefault(); if (/^https:/.test(url)) shell.openExternal(url); } });
-    win.webContents.on('did-fail-load', async (e, code, desc, url, isMain) => {
-      if (!isMain || code === -3) return; startupLog(`server load failed ${code} ${desc}`);
-      const r = await dialog.showMessageBox(win, { type: 'warning', buttons: ['Try again', 'Work on this PC (local mode)', 'Close'], defaultId: 0, title: 'Server not reachable', message: 'Could not reach the server ' + server, detail: desc + '\nCheck the internet / office network. Your local company files on this PC are unchanged.' });
-      if (r.response === 0) win.loadURL(server + '/app/').catch(() => {}); else if (r.response === 1) backToLocal('server unreachable'); else app.quit();
-    });
-    win.webContents.on('before-input-event', async (e, input) => { if (input.type === 'keyDown' && input.control && input.shift && input.key.toLowerCase() === 'l') { const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Cancel', 'Switch to local mode'], defaultId: 1, message: 'Stop using the server and work with company files on this PC?' }); if (r.response === 1) backToLocal('user'); } });
-    win.on('page-title-updated', e => e.preventDefault());
-    return;
-  }
+  if (startMode() === 'cloud') return createCloudWindow();
+  win = new BrowserWindow({ width: 1366, height: 820, minWidth: 1000, minHeight: 640, title: appName(), icon: windowIcon(), show: false, backgroundColor: '#0b2545',
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } });
   Menu.setApplicationMenu(null);
   let shown = false;
   const showWin = () => { if (shown || !win || win.isDestroyed() || process.env.RS_HIDDEN) return; shown = true; win.maximize(); win.show(); };
@@ -446,14 +517,14 @@ else {
     try {
       dataDir = pickDataDir(); startupLog('data folder: ' + dataDir);
       step = 'preparing its data folder'; ensureDirs();
-      step = 'reading users and companies'; loadSys();
+      step = 'reading users and companies'; loadSys(); migrateMode();
       step = 'loading the database engine';
       const sqlDir = path.dirname(require.resolve('sql.js'));
       SQL = await initSqlJs({ locateFile: f => path.join(sqlDir, f) });
       step = 'opening its window'; createWindow();
       startupLog('started OK');
     } catch (e) { fatal(step, e); return; }
-    if (process.env.RS_E2E) { const e2e = path.join(__dirname, 'test', process.env.RS_E2E_SCRIPT || 'e2e.js'); if (fs.existsSync(e2e)) require(e2e)({ win, H, S, app, dataDir, flush, htmlToPdf, docHtml }); }
+    if (process.env.RS_E2E) { const e2e = path.join(__dirname, 'test', process.env.RS_E2E_SCRIPT || 'e2e.js'); if (fs.existsSync(e2e)) require(e2e)({ win, H, S, app, dataDir, flush, htmlToPdf, docHtml, getWin: () => win, SHELL, sysRef: () => sys }); }
   }).catch(e => fatal('starting up', e));
   app.on('before-quit', () => { try { flush(); } catch (e) { logError(e); } });
   app.on('window-all-closed', () => { try { flush(); } catch (e) { logError(e); } app.quit(); });

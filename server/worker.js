@@ -30,6 +30,8 @@ const CR = {
   fromB64: s => { const b = atob(String(s)); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; },
   utf8: s => enc.encode(s),
 };
+// rows changed + schema version: equal before and after a write = the write changed nothing (null = unknown → always upload)
+function totalChanges(db) { try { const a = db.exec('SELECT total_changes()'), b = db.exec('PRAGMA schema_version'); return a[0].values[0][0] + ':' + b[0].values[0][0]; } catch (_) { return null; } }
 class D1Driver { constructor(db) { this.db = db; } async all(sql, p) { return (await this.db.prepare(sql).bind(...(p || [])).all()).results || []; } async run(sql, p) { const r = await this.db.prepare(sql).bind(...(p || [])).run(); return { changes: r.meta && r.meta.changes || 0 }; } }
 
 // ---- company files in R2 with compare-and-swap writes ----
@@ -39,21 +41,25 @@ class R2CompanyStore {
   lock(id, fn) { const prev = this.locks.get(id) || Promise.resolve(); const next = prev.catch(() => {}).then(fn); this.locks.set(id, next.catch(() => {})); return next; }
   async load(id, force) {
     const SQL = await getSQL(); const k = this.key(id); const c = this.cache.get(id);
-    if (c && !force) { const h = await this.b.head(k); if (h && h.etag === c.etag) return c; }
+    // v2.1: a file checked against R2 in the last 300 ms (e.g. the calls of one batch) is not checked again
+    if (c && !force && Date.now() - (c.checked || 0) < 300) return c;
+    if (c && !force) { const h = await this.b.head(k); if (h && h.etag === c.etag) { c.checked = Date.now(); return c; } }
     const o = await this.b.get(k); if (!o) throw new Error('Company file is missing on the server');
     const db = new SQL.Database(new Uint8Array(await o.arrayBuffer()));
     const comp = new core.Company(db, 'admin'); comp.migrate();
     if (c) { try { c.db.close(); } catch (_) {} }
-    const e = { db, comp, etag: o.etag }; this.cache.set(id, e); return e;
+    const e = { db, comp, etag: o.etag, checked: Date.now() }; this.cache.set(id, e); return e;
   }
   read(id, fn) { return this.lock(id, async () => { const e = await this.load(id); e.comp._txDepth = 0; return fn(e.comp); }); }
   write(id, fn) {
     return this.lock(id, async () => {
       for (let attempt = 0; attempt < 6; attempt++) {
         const e = await this.load(id, attempt > 0);
+        const before = totalChanges(e.db);
         e.db.run('BEGIN'); e.comp._txDepth = 1; let r;
         try { r = fn(e.comp); e.db.run('COMMIT'); } catch (err) { try { e.db.run('ROLLBACK'); } catch (_) {} e.comp._txDepth = 0; throw err; }
         e.comp._txDepth = 0;
+        if (before !== null && totalChanges(e.db) === before) return r;      // v2.1: nothing changed (e.g. opening a company with no recurring entry due) → no upload
         const bytes = e.db.export();      // note: export() resets sql.js prepared statements; the engine prepares per call
         const put = await this.b.put(this.key(id), bytes, { onlyIf: { etagMatches: e.etag } });
         if (put) { e.etag = put.etag; return r; }
@@ -94,7 +100,7 @@ function cookieOf(req, name) { const h = req.headers.get('cookie') || ''; for (c
 
 async function serveDownload(env, req, d) {
   // big files are stored as ~900 KB parts and joined here as one stream (same bytes as the original file)
-  const headers = Object.assign({ 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename="${d.name}"`, 'content-length': String(d.size), 'cache-control': 'public, max-age=3600' }, SEC);
+  const headers = Object.assign({ 'content-type': d.type || 'application/octet-stream', 'content-disposition': `attachment; filename="${d.name}"`, 'content-length': String(d.size), 'cache-control': 'public, max-age=3600' }, SEC);
   if (req.method === 'HEAD') return new Response(null, { headers });
   const { readable, writable } = new FixedLengthStream(d.size);
   (async () => { for (const p of d.parts) { const r = await env.ASSETS.fetch(new Request(new URL(p, req.url))); if (!r.ok) { await writable.abort('part missing'); return; } await r.body.pipeTo(writable, { preventClose: true }); } await writable.close(); })();
@@ -114,9 +120,9 @@ export default {
       if (ADMIN_BOOTSTRAP && !BOOTED) { await svc.bootstrapAdmin(ADMIN_BOOTSTRAP.username, ADMIN_BOOTSTRAP.pw, true); BOOTED = true; }
       let body; try { body = await req.json(); } catch (_) { return json({ ok: false, error: 'Bad JSON' }, 400); }
       try {
-        const r = await svc.handle({ token: cookieOf(req, 'rs_sid'), method: body.m, args: body.a, ip: req.headers.get('cf-connecting-ip') || '', ua: req.headers.get('user-agent') || '' });
+        const r = await svc.handle({ token: cookieOf(req, 'rs_sid'), method: body.m, args: body.a, ip: req.headers.get('cf-connecting-ip') || '', ua: req.headers.get('user-agent') || '', defer: ctx && typeof ctx.waitUntil === 'function' ? p => ctx.waitUntil(p) : null });
         const h = {};
-        if (r.setToken) h['set-cookie'] = `rs_sid=${r.setToken}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=604800`;
+        if (r.setToken) h['set-cookie'] = `rs_sid=${r.setToken}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${r.cookieMaxAge || 604800}`;
         if (r.clearToken) h['set-cookie'] = 'rs_sid=; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=0';
         return json({ ok: true, data: r.data === undefined ? null : r.data }, 200, h);
       } catch (e) { if (!e.code && /^(TypeError|ReferenceError|RangeError|SyntaxError)$/.test(e.name)) console.log('api error', body && body.m, e && e.stack || e); return json({ ok: false, error: e.message || String(e), code: e.code || 'error' }, e.status || 400); }

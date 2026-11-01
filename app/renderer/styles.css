@@ -162,6 +162,32 @@ html[data-theme=dark] #modal .actions{background:linear-gradient(transparent,var
 #docview .dv-f{flex:1;border:0;background:#fff;border-radius:0 0 8px 8px;width:100%}
 #tmenu{display:none}
 /* phones & small tablets (browser login from anywhere) */
+
+/* ---------- v2.1 login-first + connection states ---------- */
+.lbtn{width:100%;justify-content:center;padding:10px;font-size:14px}
+.lbtn:disabled{opacity:.75;cursor:progress}
+.lmode{margin:-4px 0 12px;padding:8px 10px;border-radius:8px;background:#eaf2fb;color:var(--navy);font-size:12.5px;line-height:1.45}
+.lmode small{display:block;opacity:.75;margin-top:2px}
+.pwrap{position:relative;display:flex}.pwrap input{flex:1;padding-right:38px}
+.pweye{position:absolute;right:4px;top:50%;transform:translateY(-50%);border:0;background:none;cursor:pointer;font-size:15px;opacity:.6;padding:4px 6px}
+.pweye:hover{opacity:1}
+.lrem{display:flex;align-items:center;gap:6px;font-size:12.5px;margin:2px 0 8px;cursor:pointer}.lrem span{color:var(--muted)}
+.lrem.hidden{display:none}
+.lconn{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12.5px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb,#f0b400 14%,transparent)}
+.lconn[data-state=fail]{background:color-mix(in srgb,#d93025 12%,transparent)}
+.lconn[data-state=fail] .spin{display:none}.lconn #lconnt{flex:1}
+.lalt{margin-top:14px;font-size:12.5px;display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center}
+.lalt a{color:var(--blue);text-decoration:none;cursor:pointer}.lalt a:hover{text-decoration:underline}.lalt span{color:var(--muted)}
+.lalt.hidden{display:none}
+.spin{display:inline-block;width:13px;height:13px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:rsspin .8s linear infinite;vertical-align:-2px;opacity:.8;flex:none}
+@keyframes rsspin{to{transform:rotate(360deg)}}
+#netbar{position:fixed;left:50%;transform:translateX(-50%);top:8px;z-index:9999;max-width:94vw;padding:7px 14px;border-radius:20px;font-size:12.5px;box-shadow:0 4px 18px rgba(0,0,0,.18);display:flex;gap:8px;align-items:center;pointer-events:none}
+#netbar.hidden{display:none}
+#netbar.busy{background:#0b2545;color:#fff}
+#netbar.slow{background:#8a5a00;color:#fff}
+#netbar.off{background:#b3261e;color:#fff;pointer-events:auto}
+html.net-busy{cursor:progress}
+
 @media (max-width: 820px){
   #app{grid-template-columns:1fr;grid-template-rows:auto 1fr auto;height:100dvh}
   #top{grid-column:1;flex-wrap:wrap;gap:6px 10px;padding:6px 8px}
@@ -182,4 +208,34 @@ html[data-theme=dark] #modal .actions{background:linear-gradient(transparent,var
   .toolbar{flex-wrap:wrap}
   .tbl-wrap{overflow-x:auto}
   #docview{padding:4px}
+}
+
+html[data-theme=dark] .lmode{background:#13315c;color:#dfe8f3}
+
+/* v2.1 quick search */
+.qs-res{max-height:55vh;overflow:auto;border:1px solid var(--line);border-radius:8px;margin-top:4px}
+.qs-row{display:flex;flex-direction:column;padding:8px 11px;border-bottom:1px solid var(--line);cursor:pointer}.qs-row:hover{background:var(--sel)}
+.qs-row:last-child{border-bottom:0}.qs-t{font-weight:600}.qs-row small{color:var(--muted)}.qs-hint{padding:12px;color:var(--muted);font-size:12.5px}
+html[data-theme=dark] .qs-row:hover{background:#22344d}
+#tsearch,#ttheme{font-size:14px}
+
+/* ---------- v2.1 phone layout fixes ---------- */
+@media (max-width: 820px){
+  .vhead{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .vhead .w2,.vhead .w3{grid-column:1 / -1}
+  .vfoot{grid-template-columns:minmax(0,1fr)}
+  table.grid{min-width:640px}
+  table.grid th:nth-child(2){min-width:190px}
+  .card:has(> table.grid){overflow-x:auto;-webkit-overflow-scrolling:touch}
+  #top .logo{display:none}
+  #tdate{display:none}
+  #tcomp .lbl,#tlogout .lbl,#tcomp kbd{display:none}
+  #top .tbtn{padding:5px 8px;font-size:15px;flex:none}
+  .comp-card{width:94vw!important;max-height:92dvh;overflow:auto;padding:18px!important}
+  .comp-card .toolbar .btn{flex:1 1 auto}
+  .fld input,.fld select,.fld textarea,.btn{font-size:15px}
+  .fld input,.fld select{min-height:38px}
+  .btn{min-height:36px}
+  h2.title{gap:6px}
+  #docview .dv-bar{flex-wrap:wrap;gap:6px}
 }

@@ -14,6 +14,10 @@ const APP_NAME = 'R&S Sons Accounting';
 const PBKDF2_ITER = 100000;               // PBKDF2-SHA256, 100k rounds, 16-byte random salt per user
 const IDLE_MS = 12 * 3600 * 1000;         // a session ends after 12 h without use
 const MAX_MS = 7 * 24 * 3600 * 1000;      // and after 7 days in any case
+// v2.1 "stay logged in" (the Windows / Android apps, or the web login's "remember me"): like a phone app, the login lasts
+// 60 days without use and 180 days at most; Logout, a password change or the admin disabling the user ends it at once.
+const LONG_IDLE_MS = 60 * 24 * 3600 * 1000;
+const LONG_MAX_MS = 180 * 24 * 3600 * 1000;
 const ROLES = ['admin', 'operator', 'viewer'];
 
 class ApiError extends Error { constructor(msg, code, status) { super(msg); this.code = code || 'error'; this.status = status || 400; } }
@@ -44,9 +48,10 @@ function createService(env) {
     if (!token || typeof token !== 'string' || token.length < 20) return null;
     const th = await CR.sha256Hex(token);
     const s = await sys.session(th); if (!s) return null;
-    if (Number(s.expires_at) < now || now - Number(s.created_at) > MAX_MS) { await sys.deleteSession(th); return null; }
+    const long = Number(s.expires_at) - Number(s.last_seen) > IDLE_MS + 60000;   // a "stay logged in" session
+    if (Number(s.expires_at) < now || now - Number(s.created_at) > (long ? LONG_MAX_MS : MAX_MS)) { await sys.deleteSession(th); return null; }
     const u = await sys.userById(s.user_id); if (!u || !u.active) { await sys.deleteSession(th); return null; }
-    if (now - Number(s.last_seen) > 60000) await sys.touchSession(th, now, now + IDLE_MS);
+    if (now - Number(s.last_seen) > 60000) await sys.touchSession(th, now, now + (long ? LONG_IDLE_MS : IDLE_MS));
     return { th, s, u };
   }
   function pubUser(u) { return u && { username: u.username, role: u.role, mustChange: !!u.must_change, fullName: u.full_name || '' }; }
@@ -57,15 +62,35 @@ function createService(env) {
     // req: { token, method, args, ip, ua, now }
     const now = req.now || Date.now();
     const m = String(req.method || ''); const a = Array.isArray(req.args) ? req.args : [];
-    const ctx = { ip: req.ip || '', ua: req.ua || '', now, out: {} };
+    const ctx = { ip: req.ip || '', ua: req.ua || '', now, out: {}, defer: req.defer || null };
     const sess = await loadSession(req.token, now);
     if (sess) { ctx.th = sess.th; ctx.user = sess.u; ctx.companyId = sess.s.company_id || null; }
+    // v2.1 'batch': several calls in ONE request (one session check, one trip over the internet). The web app sends the
+    // calls a screen makes at the same moment (e.g. the 10 master lists when a company opens) this way. Each call is
+    // checked exactly like a single call and answers on its own ({ ok, data } or { ok: false, error, code }), in order.
+    if (m === 'batch') {
+      if (a.length > 40) throw new ApiError('Too many calls in one batch');
+      const out = [];
+      for (const it of a) {
+        const bm = String((it && it[0]) || ''); const ba = Array.isArray(it && it[1]) ? it[1] : [];
+        try {
+          if (bm === 'batch' || BATCH_NO.has(bm)) throw new ApiError('Not allowed in a batch: ' + bm);
+          out.push({ ok: true, data: await runOne(ctx, bm, ba) });
+        } catch (e) { out.push({ ok: false, error: e.message || String(e), code: e.code || 'error' }); }
+      }
+      return { data: out };
+    }
+    const data = await runOne(ctx, m, a);
+    return { data, ...ctx.out };
+  }
+  async function runOne(ctx, m, a) {
     const h = H[m]; if (!h) throw new ApiError('Unknown API ' + m, 'unknown', 404);
     if (!PUBLIC.has(m) && !ctx.user) throw new ApiError('Please log in again (your session ended).', 'auth', 401);
     if (ctx.user && ctx.user.must_change && !PUBLIC.has(m) && !MUSTCHANGE_OK.has(m)) throw new ApiError('Please set a new password first.', 'must_change', 403);
-    const data = await h(ctx, ...a);
-    return { data, ...ctx.out };
+    const r = await h(ctx, ...a);
+    return r === undefined ? null : r;
   }
+  const BATCH_NO = new Set(['auth.login', 'auth.logout', 'auth.changePassword']);   // these set/clear the login cookie
   function need(ctx, role) {
     if (!ctx.user) throw new ApiError('Please log in', 'auth', 401);
     if (!PERMS.allowed(ctx.user.role, role)) throw new ApiError(`Your user role (${ctx.user.role}) is not allowed to do this. Ask the admin.`, 'forbidden', 403);
@@ -104,7 +129,8 @@ function createService(env) {
     'app.info': async (ctx) => ({ firstRun: false, server: true, name: await appName(), defaultName: APP_NAME, theme: ADM.cleanTheme((await branding()).theme || 'light'), iconUrl: await iconUrl(), version: VERSION,
       dataDir: env.dataLabel || 'Server', platform: 'web', user: pubUser(ctx.user), company: ctx.user && ctx.companyId ? await companyInfo(ctx).catch(() => null) : null }),
 
-    'auth.login': async (ctx, username, pw) => {
+    'auth.login': async (ctx, username, pw, opts) => {
+      const remember = !!(opts && opts.remember);
       const uname = String(username || '').trim().toLowerCase().slice(0, 60);
       const keys = ['u:' + uname, 'ip:' + ctx.ip];
       for (const k of keys) { const at = await sys.attempt(k); if (at && Number(at.until) > ctx.now) throw new ApiError(`Too many wrong attempts. Try again in ${Math.ceil((Number(at.until) - ctx.now) / 1000)} s.`, 'rate_limited', 429); }
@@ -120,15 +146,14 @@ function createService(env) {
         await sys.log(uname, 'Login failed', '', ctx.ip);
         throw new ApiError('Wrong username or password', 'bad_login', 401);
       }
-      for (const k of keys) await sys.clearAttempt(k);
+      await Promise.all(keys.map(k => sys.clearAttempt(k)));
       // re-hash old (v1.1, 120k) or weaker hashes to the current format
       if (!String(u.pw).startsWith(`pbkdf2-sha256$${PBKDF2_ITER}$`)) await sys.updateUser(u.id, { pw: await hashPassword(pw) });
       const token = CR.randomToken(); const th = await CR.sha256Hex(token);
-      await sys.addSession({ token_hash: th, user_id: u.id, now: ctx.now, expires_at: ctx.now + IDLE_MS, ip: ctx.ip, ua: ctx.ua });
-      await sys.updateUser(u.id, { last_login: new Date(ctx.now).toISOString() });
-      await sys.log(u.username, 'Login', '', ctx.ip);
-      if (Math.random() < 0.05) await sys.purgeSessions(ctx.now);
-      ctx.out.setToken = token;
+      await sys.addSession({ token_hash: th, user_id: u.id, now: ctx.now, expires_at: ctx.now + (remember ? LONG_IDLE_MS : IDLE_MS), ip: ctx.ip, ua: ctx.ua });
+      await Promise.all([sys.updateUser(u.id, { last_login: new Date(ctx.now).toISOString() }), sys.log(u.username, remember ? 'Login (stay logged in)' : 'Login', '', ctx.ip),
+        Math.random() < 0.05 ? sys.purgeSessions(ctx.now) : null]);
+      ctx.out.setToken = token; ctx.out.cookieMaxAge = Math.round((remember ? LONG_MAX_MS : MAX_MS) / 1000);
       return pubUser(u);
     },
     'auth.logout': async (ctx) => { if (ctx.th) await sys.deleteSession(ctx.th); ctx.out.clearToken = true; return true; },
@@ -246,11 +271,11 @@ function createService(env) {
     'company.open': async (ctx, id) => {
       const meta = await sys.company(id); if (!meta) throw new ApiError('Company not found');
       if (!canSeeCompany(ctx.user, id)) throw new ApiError('You do not have access to this company', 'forbidden', 403);
-      await sys.setSessionCompany(ctx.th, id); ctx.companyId = id;
-      await sys.updateCompany(id, { last_opened: new Date(ctx.now).toISOString() });
+      await Promise.all([sys.setSessionCompany(ctx.th, id), sys.updateCompany(id, { last_opened: new Date(ctx.now).toISOString() })]); ctx.companyId = id;
       // operators/admins: post recurring vouchers marked "auto" that have fallen due (each due date is posted once, ever)
       if (PERMS.allowed(ctx.user.role, 'operator')) { try { await withCompany(ctx, 'write', c => c.runRecurring({ onlyAuto: true })); } catch (_) {} }
-      try { await store.dailyBackup(id); } catch (_) {}
+      const bk = Promise.resolve().then(() => store.dailyBackup(id)).catch(() => {});
+      if (ctx.defer) ctx.defer(bk); else await bk;   // hosted: the daily copy is made after the answer is sent
       return companyInfo(ctx);
     },
     'company.close': async (ctx) => { await sys.setSessionCompany(ctx.th, null); ctx.companyId = null; return true; },

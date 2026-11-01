@@ -122,7 +122,7 @@ async function start() {
         try {
           const r = await svc.handle({ token: cookieOf(req, 'rs_sid'), method: body.m, args: body.a, ip: clientIp(req), ua: req.headers['user-agent'] || '' });
           const sec = isHttps(req) ? '; Secure' : '';
-          if (r.setToken) headers['Set-Cookie'] = `rs_sid=${r.setToken}; HttpOnly; Path=/; SameSite=Strict; Max-Age=604800${sec}`;
+          if (r.setToken) headers['Set-Cookie'] = `rs_sid=${r.setToken}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${r.cookieMaxAge || 604800}${sec}`;
           if (r.clearToken) headers['Set-Cookie'] = `rs_sid=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0${sec}`;
           return send(res, 200, JSON.stringify({ ok: true, data: r.data === undefined ? null : r.data }), headers);
         } catch (e) {
