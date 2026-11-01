@@ -1,0 +1,77 @@
+{
+  "name": "rs-sons-accounting",
+  "productName": "R&S Sons Accounting",
+  "version": "2.0.0",
+  "description": "R&S Sons Accounting - GST accounting, inventory, ITR computation; desktop + multi-user server",
+  "author": "R&S Sons",
+  "main": "main.js",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/core.test.js && node test/dashboard.test.js && node test/admin.test.js && node test/itr.test.js && node test/automation.test.js"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "sql.js": "^1.10.3",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.rssons.accounting",
+    "productName": "R&S Sons Accounting",
+    "copyright": "Copyright \u00a9 2026 R&S Sons",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "core/**",
+      "renderer/**",
+      "assets/**",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "R&S Sons Accounting",
+      "artifactName": "RS-Sons-Accounting-Setup-${version}.${ext}",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "perMachine": false
+    },
+    "portable": {
+      "artifactName": "RS-Sons-Accounting-Portable-${version}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "dir"
+      ],
+      "icon": "build/icon.png"
+    }
+  }
+}

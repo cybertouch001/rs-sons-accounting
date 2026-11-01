@@ -1,0 +1,1 @@
+const c=require('crypto');const salt=c.randomBytes(16).toString('hex');const pw=process.argv[2];console.log(JSON.stringify({username:'admin',pw:`pbkdf2-sha256$100000$${salt}$${c.pbkdf2Sync(pw,salt,100000,32,'sha256').toString('hex')}`}));

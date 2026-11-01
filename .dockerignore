@@ -1,0 +1,8 @@
+**/node_modules
+app/dist
+**/data
+**/.env
+private
+research
+site-v1
+*.log

@@ -1,0 +1,14 @@
+# docker compose up -d   →  http://SERVER-IP:8080/app/
+services:
+  rs-sons:
+    build: .
+    image: rs-sons-accounting:2.0.0
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${PORT:-8080}:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      - PORT=8080
+      - DATA_DIR=/data

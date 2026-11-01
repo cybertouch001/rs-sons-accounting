@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-src 'self' blob: data:;">
+<title>R&amp;S Sons Accounting</title>
+<link rel="stylesheet" href="styles.css">
+</head><body>
+<div id="login" class="hidden"><div class="login-card">
+  <div class="brand"><img class="brand-img" src="../assets/logo.png" alt=""><div><h1 id="lname">R&amp;S Sons Accounting</h1><div>GST Accounting · Inventory · Payroll</div></div></div>
+  <form id="loginForm"><div class="fld"><label>Username</label><input id="lu" autocomplete="username" value="admin"></div>
+  <div class="fld"><label>Password</label><input id="lp" type="password" autocomplete="current-password"></div>
+  <div class="err" id="lerr"></div>
+  <button class="btn primary" style="width:100%;justify-content:center;padding:9px" type="submit">Login (Enter)</button></form>
+  <div style="margin-top:14px;font-size:11.5px;color:var(--muted)" id="lhint">First time? Username <b>admin</b>, password <b>admin</b> — you will be asked to set a new password.</div>
+  <div style="margin-top:6px;font-size:11px;color:var(--muted);opacity:.8" id="lver"></div>
+  <div style="margin-top:4px;font-size:11px;color:var(--muted)" id="lweb" class="hidden"></div>
+  <button type="button" class="btn sm hidden" id="lserver" style="margin-top:10px">🌐 Connect to multi-user server…</button>
+</div></div>
+<div id="companies" class="hidden"><div class="comp-card" id="compCard"></div></div>
+<div id="app" class="hidden">
+  <div id="top"><button class="tbtn" id="tmenu" title="Menu">☰</button><div class="logo"><img class="brand-img" src="../assets/logo.png" alt=""><span id="tappname">R&amp;S Sons Accounting</span></div>
+    <div class="cname" id="tcname"></div>
+    <span style="font-size:12px;opacity:.8">FY</span><select id="tfy" title="Financial year (F2 changes date)"></select>
+    <span style="font-size:12px;opacity:.8">Date</span><input id="tdate" type="date" title="Working date (F2)">
+    <span class="user" id="tuser"></span>
+    <button class="tbtn" id="tcomp" title="Change company (F1)">Company <kbd style="background:none;color:#ccd;border-color:#456">F1</kbd></button>
+    <button class="tbtn" id="tlogout">Logout</button></div>
+  <nav id="nav"></nav>
+  <main id="main"></main>
+  <div id="status"></div>
+</div>
+<div id="modal" class="hidden"><div class="box" id="modalBox"></div></div>
+<div id="combo" class="hidden"></div>
+<div id="toast"></div>
+<script src="web-api.js"></script>
+<script src="../core/util.js"></script>
+<script src="../core/calc.js"></script>
+<script src="app.js"></script>
+<script src="screens.js"></script>
+<script src="screens2.js"></script>
+<script src="demo.js"></script>
+<script src="vouchers.js"></script>
+<script src="reports.js"></script>
+<script src="automation.js"></script>
+</body></html>

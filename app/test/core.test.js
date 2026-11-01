@@ -1,0 +1,157 @@
+
+// Core engine tests: node test/core.test.js
+const assert = require('assert');
+const initSqlJs = require('sql.js');
+const { Company, util: U } = require('../core');
+const g = s => s + U.gstinChecksum(s);
+let pass = 0; const ok = (c, m) => { assert.ok(c, m); pass++; console.log('  ✓ ' + m); };
+
+async function seed(SQL, opts = {}) {
+  const db = new SQL.Database();
+  const c = Company.create(db, { name: 'R&S Sons Demo Traders', address: 'Shop 12, Godowlia Market', city: 'Varanasi', pincode: '221001', state_code: '09', gstin: g('09AAACR5055K1Z'), pan: 'AAACR5055K', phone: '9800000000', email: 'accounts@example.com', books_begin: '2026-04-01', bank_name: 'State Bank of India', bank_acc: '12345678901', bank_ifsc: 'SBIN0000001', upi_id: 'rssons@sbi' }, 'admin');
+  const grp = n => c.groupByName(n).id;
+  const L = {};
+  L.capital = c.ledgerByName("Proprietor's Capital").id; c.saveLedger({ id: L.capital, name: "Proprietor's Capital", group_id: grp('Capital Account'), opening: -472500 });
+  L.bank = c.saveLedger({ name: 'SBI Current A/c', group_id: grp('Bank Accounts'), opening: 300000, bank_name: 'SBI', bank_acc: '12345678901', ifsc: 'SBIN0000001' });
+  L.cash = c.ledgerByName('Cash').id; c.saveLedger({ id: L.cash, name: 'Cash', group_id: grp('Cash-in-Hand'), opening: 50000 });
+  L.furn = c.saveLedger({ name: 'Furniture & Fixtures', group_id: grp('Fixed Assets'), opening: 100000, dep_rate: 10 });
+  L.custUP = c.saveLedger({ name: 'Kashi Medical Store', group_id: grp('Sundry Debtors'), gstin: g('09AABCK1234M1Z'), address: 'Lanka', city: 'Varanasi', pincode: '221005', credit_days: 30, credit_limit: 200000, opening: 20000 });
+  L.custDL = c.saveLedger({ name: 'Delhi Pharma Distributors', group_id: grp('Sundry Debtors'), gstin: g('07AAACD4321P1Z'), city: 'New Delhi', pincode: '110001', credit_days: 45 });
+  L.custBR = c.saveLedger({ name: 'Patna Wellness (Unregistered)', group_id: grp('Sundry Debtors'), state_code: '10', city: 'Patna' });
+  L.supUP = c.saveLedger({ name: 'Ganga Chemicals', group_id: grp('Sundry Creditors'), gstin: g('09AADCG7777Q1Z'), city: 'Varanasi', opening: -30000 });
+  L.supMH = c.saveLedger({ name: 'Mumbai Packaging Co', group_id: grp('Sundry Creditors'), gstin: g('27AAFCM2222R1Z'), city: 'Mumbai', pan: 'AAFCM2222R' });
+  L.lawyer = c.saveLedger({ name: 'CA Sharma & Associates', group_id: grp('Sundry Creditors'), pan: 'ABCPS1234D' });
+  L.prof = c.saveLedger({ name: 'Professional Fees', group_id: grp('Indirect Expenses') });
+  const I = {};
+  const nos = c.list('units').find(u => u.name === 'Nos').id;
+  I.serum = c.saveItem({ name: 'Vitamin C Serum 30ml', unit_id: nos, hsn: '33049990', gst_rate: 18, sale_rate: 450, purchase_rate: 200, mrp: 599, opening_qty: 100, opening_rate: 200, min_stock: 50, barcode: '8901234567890', batch_wise: 1 });
+  I.cream = c.saveItem({ name: 'Face Cream 50g', unit_id: nos, hsn: '33049910', gst_rate: 18, sale_rate: 300, purchase_rate: 150, opening_qty: 50, opening_rate: 150 });
+  I.bottle = c.saveItem({ name: 'Glass Bottle 30ml', unit_id: nos, hsn: '70109000', gst_rate: 12, sale_rate: 15, purchase_rate: 10, opening_qty: 500, opening_rate: 10 });
+  I.service = c.saveItem({ name: 'Packaging Service', item_type: 'Service', hsn: '998549', gst_rate: 18, sale_rate: 1000 });
+  return { c, L, I, db };
+}
+
+(async () => {
+  const SQL = await initSqlJs();
+  const { c, L, I, db } = await seed(SQL);
+  console.log('Masters'); ok(c.ledgers().length > 40, 'default chart of accounts + custom ledgers created');
+  assert.throws(() => c.saveLedger({ name: 'Bad', group_id: 1, gstin: '09AAACR5055K1ZZ' }), /GSTIN/); ok(true, 'invalid GSTIN rejected');
+
+  console.log('Vouchers');
+  const s1 = c.saveVoucher({ vtype: 'SAL', date: '2026-04-10', party_id: L.custUP, items: [{ item_id: I.serum, qty: 40, rate: 450, batch_no: 'B001', exp_date: '2027-03-31' }, { item_id: I.cream, qty: 10, rate: 300, disc_pct: 10 }] });
+  let v = c.voucher(s1.id); ok(v.cgst > 0 && v.sgst === v.cgst && v.igst === 0, 'intra-state sale (UP→UP) → CGST+SGST');
+  ok(v.taxable === 18000 + 2700 && v.cgst === 1863 && v.total === Math.round(20700 * 1.18), 'sale amounts: taxable 20,700, CGST 1,863, total ' + v.total);
+  const s2 = c.saveVoucher({ vtype: 'SAL', date: '2026-04-15', party_id: L.custDL, items: [{ item_id: I.serum, qty: 20, rate: 460 }, { item_id: I.bottle, qty: 100, rate: 15 }] });
+  v = c.voucher(s2.id); ok(v.igst > 0 && v.cgst === 0 && v.is_inter === 1, 'inter-state sale (UP→Delhi) → IGST only');
+  const s3 = c.saveVoucher({ vtype: 'SAL', date: '2026-04-20', party_id: L.custBR, items: [{ item_id: I.serum, qty: 300, rate: 450 }] });
+  ok(c.voucher(s3.id).total > 100000, 'B2CL-size inter-state unregistered sale (negative stock allowed)');
+  const s4 = c.saveVoucher({ vtype: 'SAL', date: '2026-04-21', party_id: L.cash, tax_inclusive: 1, items: [{ item_id: I.cream, qty: 2, rate: 354 }] });
+  v = c.voucher(s4.id); ok(v.taxable === 600 && v.total === 708, 'cash sale with GST-inclusive rate (₹354 incl. 18% → ₹300 + tax)');
+  const p1 = c.saveVoucher({ vtype: 'PUR', date: '2026-04-05', party_id: L.supUP, ref_no: 'GC/101', items: [{ item_id: I.serum, qty: 500, rate: 210 }] });
+  const p2 = c.saveVoucher({ vtype: 'PUR', date: '2026-04-06', party_id: L.supMH, ref_no: 'MP-55', items: [{ item_id: I.bottle, qty: 1000, rate: 9 }] });
+  ok(c.voucher(p2.id).igst === 1080, 'inter-state purchase IGST 12% = 1,080');
+  const p3 = c.saveVoucher({ vtype: 'PUR', date: '2026-04-07', party_id: L.lawyer, rcm: 1, items: [{ item_id: I.service, qty: 1, rate: 5000 }] });
+  v = c.voucher(p3.id); ok(v.entries.find(e => e.ledger_name === 'GST Payable on RCM').cr === 900, 'reverse-charge purchase posts RCM liability ₹900');
+  const cn = c.saveVoucher({ vtype: 'CRN', date: '2026-04-25', party_id: L.custUP, orig_ref: v && c.voucher(s1.id).number, items: [{ item_id: I.serum, qty: 5, rate: 450 }] });
+  const dn = c.saveVoucher({ vtype: 'DBN', date: '2026-04-26', party_id: L.supUP, orig_ref: 'GC/101', items: [{ item_id: I.serum, qty: 10, rate: 210 }] });
+  ok(cn.id && dn.id, 'credit note (sales return) and debit note (purchase return) saved');
+  const bills = c.pendingBills(L.custUP);
+  const inv1 = bills.find(b => b.ref === c.voucher(s1.id).number);
+  ok(inv1 && inv1.amount === c.voucher(s1.id).total - c.voucher(cn.id).total, 'bill-wise: credit note adjusted against original invoice');
+  const r1 = c.saveVoucher({ vtype: 'RCT', date: '2026-05-02', lines: [{ ledger_id: L.bank, dr: 10000 }, { ledger_id: L.custUP, cr: 10000, bill: { type: 'agst', ref: c.voucher(s1.id).number } }], cheque_no: '000123', narration: 'Part payment' });
+  ok(c.pendingBills(L.custUP).find(b => b.ref === c.voucher(s1.id).number).amount === inv1.amount - 10000, 'receipt against bill reduces that bill');
+  c.saveVoucher({ vtype: 'RCT', date: '2026-05-03', lines: [{ ledger_id: L.cash, dr: 5000 }, { ledger_id: L.custUP, cr: 5000, bill: { type: 'agst', ref: 'Opening Balance' } }] });
+  ok(c.pendingBills(L.custUP).find(b => b.ref === 'Opening Balance').amount === 15000, 'opening balance treated as a bill and adjusted');
+  const pm = c.saveVoucher({ vtype: 'PMT', date: '2026-05-05', lines: [{ ledger_id: L.supUP, dr: 50000, bill: { type: 'agst', ref: 'GC/101' } }, { ledger_id: L.bank, cr: 50000 }], cheque_no: '445566' });
+  const tdsL = c.ledgerByTax('TDS').id;
+  c.saveVoucher({ vtype: 'JRN', date: '2026-05-06', lines: [{ ledger_id: L.prof, dr: 20000 }, { ledger_id: L.lawyer, cr: 18000 }, { ledger_id: tdsL, cr: 2000 }], narration: 'Professional fees with TDS' });
+  c.saveVoucher({ vtype: 'CNT', date: '2026-05-07', lines: [{ ledger_id: L.bank, dr: 20000 }, { ledger_id: L.cash, cr: 20000 }], narration: 'Cash deposited' });
+  assert.throws(() => c.saveVoucher({ vtype: 'CNT', date: '2026-05-07', lines: [{ ledger_id: L.prof, dr: 1 }, { ledger_id: L.cash, cr: 1 }] }), /Contra/); ok(true, 'contra restricted to cash/bank');
+  assert.throws(() => c.saveVoucher({ vtype: 'JRN', date: '2026-05-07', lines: [{ ledger_id: L.prof, dr: 100 }, { ledger_id: L.cash, cr: 90 }] }), /do not match/); ok(true, 'unbalanced journal rejected');
+  const so = c.saveVoucher({ vtype: 'SOR', date: '2026-05-08', party_id: L.custDL, items: [{ item_id: I.cream, qty: 20, rate: 300 }] });
+  const conv = c.convertVoucher(so.id, 'SAL'); conv.date = '2026-05-09'; const s5 = c.saveVoucher(conv);
+  ok(c.voucher(s5.id).linked_id === so.id && c.pendingOrders('SOR').length === 0, 'sales order converted to invoice (order no longer pending)');
+  c.saveVoucher({ vtype: 'QTN', date: '2026-05-08', party_id: L.custUP, items: [{ item_id: I.serum, qty: 10, rate: 440 }] });
+  c.saveVoucher({ vtype: 'DCH', date: '2026-05-08', party_id: L.custUP, items: [{ item_id: I.serum, qty: 2, rate: 0 }] });
+  c.saveVoucher({ vtype: 'POR', date: '2026-05-08', party_id: L.supMH, items: [{ item_id: I.bottle, qty: 2000, rate: 9 }] });
+  c.saveVoucher({ vtype: 'STJ', date: '2026-05-10', narration: 'Breakage', items: [{ item_id: I.bottle, qty: 10, rate: 10, direction: -1 }, { item_id: I.cream, qty: 1, rate: 100, direction: 1 }] });
+  const bom = c.saveBom({ name: 'Serum Kit', item_id: I.cream, qty: 1, items: [{ item_id: I.bottle, qty: 2 }] });
+  const prd = c.saveVoucher({ vtype: 'PRD', date: '2026-05-11', bom_id: bom, items: [{ item_id: I.cream, qty: 5, direction: 1 }, { item_id: I.bottle, qty: 10, direction: -1 }] });
+  ok(c.voucher(prd.id).items.find(i => i.direction > 0).rate > 0, 'production voucher costs finished goods from components');
+  const opt = c.saveVoucher({ vtype: 'JRN', date: '2026-05-12', status: 'optional', lines: [{ ledger_id: L.prof, dr: 999 }, { ledger_id: L.cash, cr: 999 }] });
+  const dup = c.duplicateVoucher(s4.id, '2026-05-13'); c.setVoucherStatus(dup.id, 'cancelled');
+  ok(c.voucher(dup.id).status === 'cancelled', 'voucher duplicated and cancelled');
+  // edit & delete with audit
+  const e = c.voucherToInput(c.voucher(s4.id)); e.narration = 'edited'; c.saveVoucher(e);
+  const tmp = c.saveVoucher({ vtype: 'JRN', date: '2026-05-14', lines: [{ ledger_id: L.prof, dr: 1 }, { ledger_id: L.cash, cr: 1 }] }); c.deleteVoucher(tmp.id);
+  const audit = c.auditLog({ from: '2000-01-01', to: '2100-01-01' }).rows;
+  ok(audit.some(a => a.action === 'UPDATE' && a.entity === 'voucher') && audit.some(a => a.action === 'DELETE'), 'audit trail records edits and deletions');
+  // payroll
+  c.saveSimple('employees', { name: 'Ramesh Kumar', designation: 'Accountant', basic: 12000, hra: 4000, da: 2000, other_allow: 1000, pf_applicable: 1, esi_applicable: 1, pt: 200 });
+  c.saveSimple('employees', { name: 'Sita Devi', designation: 'Sales', basic: 20000, hra: 8000, da: 0, other_allow: 2000, pf_applicable: 1, esi_applicable: 0, tds: 500 });
+  const pr = c.payrollProcess('2026-05'); ok(pr.id && c.salaryRegister({ month: '2026-05' }).rows.length === 2, 'payroll processed into salary journal');
+
+  console.log('Reports');
+  const F = { from: '2026-04-01', to: '2027-03-31' };
+  const tb = c.trialBalance(F); ok(tb.meta.balanced && tb.foot.dr === tb.foot.cr, `trial balance tallies: Dr ${tb.foot.dr} = Cr ${tb.foot.cr}`);
+  ok(Math.abs(tb.meta.diff) < 0.01, 'no difference in opening balances');
+  const pl = c.profitLoss(F); const bs = c.balanceSheet({ to: '2027-03-31' });
+  ok(bs.meta.balanced, `balance sheet balances: ${bs.meta.liabilities} = ${bs.meta.assets}`);
+  ok(Math.abs(bs.meta.netProfit - pl.meta.netProfit) < 0.01, 'net profit same in P&L and Balance Sheet: ' + pl.meta.netProfit);
+  // independent net profit check
+  const B = c.balances(F.from, F.to); let ie = 0; for (const l of Object.values(B.led)) if (l.nature === 'I' || l.nature === 'E') ie += l.bal;
+  ok(Math.abs(U.r2(-ie + pl.meta.closingStock - pl.meta.openingStock) - pl.meta.netProfit) < 0.01, 'net profit = incomes − expenses + closing stock − opening stock');
+  const ss = c.stockSummary(F); const serum = ss.rows.find(r => r.name.startsWith('Vitamin'));
+  ok(serum.cq === 100 + 500 - 40 - 20 - 300 + 5 - 10, 'stock summary closing qty for serum = ' + serum.cq);
+  ok(Math.abs(ss.foot.cv - pl.meta.closingStock) < 0.01, 'stock summary value = P&L closing stock');
+  const lg = c.ledgerStatement({ ledger_id: L.custUP, ...F }); ok(lg.rows.length > 4, 'ledger statement for customer');
+  ok(Math.abs(lg.meta.closing - c.ledgerBalance(L.custUP, '2027-03-31')) < 0.01, 'ledger closing = balance');
+  ok(c.dayBook({ from: '2026-04-01', to: '2026-05-31' }).rows.length >= 20, 'day book lists vouchers');
+  const rec = c.outstanding({ kind: 'receivable', to: '2026-06-30' }); ok(rec.rows.length >= 3 && rec.foot.total > 0, 'receivables ageing');
+  const pay = c.outstanding({ kind: 'payable', to: '2026-06-30', detail: true }); ok(pay.rows.length >= 2, 'payables bill-wise');
+  const recTotal = c.ledgers({ groupName: 'Sundry Debtors' }).reduce((s, l) => s + c.ledgerBalance(l.id, '2026-06-30'), 0);
+  ok(Math.abs(U.r2(recTotal) - rec.foot.total) < 0.01, 'outstanding total = Sundry Debtors balance');
+  const g1 = c.gstr1({ ...F, section: 'summary' });
+  const d1 = c.gstr1Data(F); ok(d1.b2b.length >= 3 && d1.b2cl.length === 1 && d1.b2cs.length >= 1 && d1.cdnr.length === 1, 'GSTR-1 sections: B2B, B2CL, B2CS, CDNR');
+  const salesTax = c.vouchers({ vtype: 'SAL', status: 'active' }).reduce((s, x) => s + x.taxable, 0) - c.voucher(cn.id).taxable;
+  ok(Math.abs(g1.foot.taxable - U.r2(salesTax)) < 0.01, 'GSTR-1 net taxable = sales − credit notes: ' + g1.foot.taxable);
+  const hsnTax = d1.hsn.reduce((s, h) => s + h.taxable, 0); ok(Math.abs(U.r2(hsnTax) - g1.foot.taxable) < 0.01, 'HSN summary taxable matches GSTR-1');
+  const j1 = c.gstr1Json(F); ok(j1.b2b && j1.b2cl && j1.b2cs && j1.hsn && j1.cdnr, 'GSTR-1 JSON has b2b/b2cl/b2cs/cdnr/hsn');
+  const g3 = c.gstr3b(F); const outLedgers = ['Output CGST', 'Output SGST', 'Output IGST'].reduce((s, n) => s - c.ledgerBalance(c.ledgerByName(n).id, F.to), 0);
+  ok(Math.abs(g3.meta.out.cgst + g3.meta.out.sgst + g3.meta.out.igst - U.r2(outLedgers)) < 0.01, 'GSTR-3B output tax = Output GST ledgers');
+  ok(g3.meta.rcmIn.taxable === 5000, 'GSTR-3B 3.1(d) reverse charge inward = 5,000');
+  ok(c.gstr3bJson(F).sup_details, 'GSTR-3B JSON');
+  ok(c.einvoiceJson(s2.id).ItemList.length === 2, 'e-invoice JSON (schema 1.1)');
+  ok(c.ewayJson(s2.id).billLists[0].itemList.length === 2, 'e-way bill JSON');
+  ok(c.tdsReport(F).rows.some(r => r.deducted === 2000), 'TDS register shows ₹2,000 deduction');
+  ok(c.register({ ...F, vtype: 'PUR' }).rows.length === 3, 'purchase register');
+  ok(c.monthlySummary(F).rows.length === 12, 'monthly summary 12 months');
+  ok(c.cashFlow(F).rows.length > 3, 'cash flow');
+  ok(c.ratios(F).rows.length === 10, 'ratio analysis');
+  ok(c.itemAnalysis(F).rows.length >= 3, 'item-wise sales & profit');
+  ok(c.partyAnalysis(F).rows.length >= 3, 'party-wise sales');
+  ok(c.batchStock({ to: '2026-06-01' }).rows.length >= 1, 'batch / expiry report');
+  ok(c.reorderReport({ to: '2026-06-01' }).rows.length >= 1, 'reorder report');
+  ok(c.godownStock({ to: '2026-06-01' }).rows.length >= 3, 'godown stock');
+  const brs = c.brs({ ledger_id: L.bank, to: '2026-06-30' }); ok(brs.rows.length >= 3, 'bank reconciliation');
+  c.setBankDate(brs.rows[0].entry_id, '2026-05-04'); ok(c.brs({ ledger_id: L.bank, to: '2026-06-30' }).rows.length === brs.rows.length - 1, 'bank date reconciles an entry');
+  const dep = c.depreciationChart({ to: '2027-03-31' }); ok(dep.rows[0].dep === 10000, 'depreciation chart: 10% WDV on 1,00,000');
+  c.postDepreciation({ to: '2027-03-31' });
+  const bs2 = c.balanceSheet({ to: '2027-03-31' }); ok(bs2.meta.balanced, 'balance sheet still balances after depreciation');
+  c.saveBudget('2026-27', L.prof, 30000); ok(c.budgetReport(F).rows[0].actual === 20000, 'budget vs actual');
+  ok(c.interestReport({ to: '2026-12-31' }).rows.length >= 1, 'interest on overdue');
+  ok(c.dashboard(F).sales > 0, 'dashboard data');
+  const vd = c.verifyData(); ok(vd.issues.every(i => i.type === 'Negative stock'), 'data verification: no integrity issues (only negative-stock warnings) ' + JSON.stringify(vd.issues));
+  ok(c.sqlQuery('SELECT COUNT(*) AS n FROM vouchers').rows[0].n > 10, 'read-only SQL query');
+  assert.throws(() => c.sqlQuery('DELETE FROM vouchers')); ok(true, 'SQL executor refuses writes');
+  // next FY carry forward
+  c.saveVoucher({ vtype: 'SAL', date: '2027-04-05', party_id: L.custUP, items: [{ item_id: I.cream, qty: 1, rate: 300 }] });
+  const tb2 = c.trialBalance({ from: '2027-04-01', to: '2028-03-31' }); ok(tb2.meta.balanced, 'next financial year: trial balance tallies with carried-forward balances');
+  const bs3 = c.balanceSheet({ to: '2028-03-31' }); ok(bs3.meta.balanced, 'next financial year balance sheet balances');
+  ok(c.fyList().length >= 2, 'multi financial year list');
+  // persistence round trip
+  const bytes = db.export(); const db2 = new SQL.Database(bytes); const c2 = new Company(db2); ok(c2.trialBalance(F).foot.dr === c.trialBalance(F).foot.dr, 'database export/import round trip');
+  console.log(`\nALL ${pass} CHECKS PASSED`);
+  module.exports.seed = seed;
+})().catch(e => { console.error('FAILED:', e); process.exit(1); });
+module.exports = { seed };
