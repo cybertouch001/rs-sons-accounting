@@ -3,6 +3,8 @@
 (function () {
   'use strict';
   if (window.rs) return;
+  // never run inside someone else's frame (click-jacking guard for the hosted web app)
+  if (window.top !== window.self) { document.documentElement.style.display = 'none'; try { window.top.location = window.location.href; } catch (_) {} return; }
   const BASE = new URL('..', location.href).pathname.replace(/\/app\/?$/, '/');   // site root (the app lives in /app/)
   const API = BASE + 'api/call';
   async function call(m, args) {
