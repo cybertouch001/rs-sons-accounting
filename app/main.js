@@ -5,7 +5,8 @@ const path = require('path'), fs = require('fs'), crypto = require('crypto'), os
 const APP_NAME = 'R&S Sons Accounting'; // default display name; the admin can rename the app (Admin Settings) — see appName()
 const VERSION = require('./package.json').version;
 // v2.1 login-first: the app opens on the login screen of the built-in hosted server (online: one login, the same data on every
-// PC and phone). "Offline mode" (files on this PC, exactly as before) and "Advanced: apna server" stay one click away.
+// PC and phone). "Offline mode" (files on this PC, exactly as before) stays one click away.
+// v2.3: the "own server" option is gone — the app always uses the hosted server (online) or offline mode.
 const DEFAULT_SERVER = 'https://rs-sons-accounting.sites.tab.bot';
 let SQL, win, dataDir, sys;
 
@@ -205,7 +206,7 @@ const { READ, WRITE, ADMIN } = require('./core/perms');
 const DOCS = require('./core/docs'), XB = require('./core/exports');
 
 const H = {
-  'app.info': () => ({ canConnectServer: true, serverUrl: (sys && sys.cloudServer) || '', cloudServer: cloudServer(), firstRun: !!(sys && sys.users.some(u => u.mustChange && u.username === 'admin')), name: appName(), defaultName: APP_NAME, theme: themeSetting(), iconUrl: iconDataUrl(), version: VERSION, dataDir, platform: process.platform, user: S.user && { username: S.user.username, role: S.user.role, mustChange: !!S.user.mustChange }, company: companyInfo() }),
+  'app.info': () => ({ canConnectServer: true, serverUrl: '', cloudServer: cloudServer(), firstRun: !!(sys && sys.users.some(u => u.mustChange && u.username === 'admin')), name: appName(), defaultName: APP_NAME, theme: themeSetting(), iconUrl: iconDataUrl(), version: VERSION, dataDir, platform: process.platform, user: S.user && { username: S.user.username, role: S.user.role, mustChange: !!S.user.mustChange }, company: companyInfo() }),
   'auth.login': (username, pw) => {
     const key = String(username || '').toLowerCase(); const f = S.failed[key] || { n: 0, until: 0 };
     if (f.until > Date.now()) throw new Error(`Too many wrong attempts. Try again in ${Math.ceil((f.until - Date.now()) / 1000)} s.`);
@@ -357,8 +358,7 @@ const H = {
   },
   'file.rows': (f) => { if (!f || !f.b64) throw new Error('Choose a file'); return XB.sheetRows(XLSX, Buffer.from(f.b64, 'base64')); },
   'doc.named': async (kind, id, opts = {}) => docHtml(kind, id, opts),
-  // v2.0: use a multi-user server instead of the files on this PC (Ctrl+Shift+L returns to local mode)
-  'app.setServer': async (url) => { const base = await checkServer(url); setTimeout(() => switchMode('cloud', base), 50); return true; },
+  // offline mode → back to the online login (the hosted server)
   'app.useCloud': async () => { setTimeout(() => switchMode('cloud'), 50); return true; },
   'shell.open': (p) => { if (!String(p).startsWith(dataDir) && !String(p).startsWith(app.getPath('documents'))) throw new Error('Not allowed'); return shell.openPath(p); },
   'shell.show': (p) => { shell.showItemInFolder(p); return true; },
@@ -394,23 +394,15 @@ function startMode() {
   return sys.mode === 'local' ? 'local' : 'cloud';
 }
 function migrateMode() {
+  if (sys.cloudServer) { delete sys.cloudServer; saveSys(); }   // v2.3: no "own server" any more — always the hosted server
   if (sys.mode) return;
   // v2.0 "connected to a server" keeps that server; everyone else (new install, or v2.0 local data) opens on the online login.
   // Local company files are never touched: Offline mode opens them exactly as before.
-  if (sys.serverUrl) sys.cloudServer = sys.serverUrl.replace(/\/$/, '') === DEFAULT_SERVER ? null : sys.serverUrl;
   sys.mode = 'cloud'; delete sys.serverUrl; saveSys();
 }
-function cloudServer() { return (sys && sys.cloudServer) || process.env.RS_SERVER || DEFAULT_SERVER; }
-async function checkServer(url) {
-  let u; try { u = new URL(String(url || '').trim()); } catch (_) { throw new Error('Pura address likho, jaise https://example.com ya http://192.168.1.10:8080 (Enter the full address).'); }
-  if (!/^https?:$/.test(u.protocol)) throw new Error('Address https:// se shuru hona chahiye (ya office network pe http://). Address must start with https://');
-  const base = u.origin + u.pathname.replace(/\/(app\/?)?$/, '').replace(/\/$/, '');
-  let ok = false; try { const r = await net.fetch(base + '/api/health', { signal: AbortSignal.timeout(20000) }); const j = await r.json(); ok = j && j.app === 'rs-sons-accounting'; } catch (_) {}
-  if (!ok) throw new Error('Is address pe R&S Sons Accounting server nahi mila: ' + base + ' (No R&S Sons Accounting server answered. Check the address and your internet.)');
-  return base;
-}
-function switchMode(mode, server) {
-  if (mode === 'cloud' && server !== undefined) sys.cloudServer = server && server.replace(/\/$/, '') !== DEFAULT_SERVER ? server : null;
+function cloudServer() { return process.env.RS_SERVER || DEFAULT_SERVER; }   // v2.3: always the hosted server (RS_SERVER = automated tests only)
+function switchMode(mode) {
+  if (sys.cloudServer) delete sys.cloudServer;   // v2.3: an old "own server" setting is dropped
   if (mode === 'local') { /* the online session stays saved: switching back to Online needs no new login */ } else { closeCompany(); S.user = null; }
   sys.mode = mode; saveSys(); startupLog('mode: ' + mode + (mode === 'cloud' ? ' ' + cloudServer() : ''));
   const old = win; process.env.RS_START_MODE = ''; createWindow(); if (old && !old.isDestroyed()) old.destroy();
@@ -426,13 +418,11 @@ function shellSenderOk(e) {
 }
 function uniqueFile(dir, name, ext) { fs.mkdirSync(dir, { recursive: true }); let f = path.join(dir, safeName(name) + '.' + ext), i = 2; while (fs.existsSync(f)) f = path.join(dir, `${safeName(name)} (${i++}).${ext}`); return f; }
 const SHELL = {
-  info: () => ({ desktop: true, version: VERSION, server: cloudServer(), custom: !!sys.cloudServer, defaultServer: DEFAULT_SERVER, viewerLock: !!sys.viewerLock }),
-  // v2.2: after a view-only user logs in on this PC, the offline / own-server choices are hidden and refused until a non-viewer logs in
+  info: () => ({ desktop: true, version: VERSION, server: cloudServer(), custom: false, defaultServer: DEFAULT_SERVER, viewerLock: !!sys.viewerLock }),
+  // v2.2: after a view-only user logs in on this PC, the offline choice is hidden and refused until a non-viewer logs in
   setViewerLock: (on) => { if (!!sys.viewerLock !== !!on) { sys.viewerLock = !!on; saveSys(); startupLog('view-only device: ' + !!on); } return true; },
-  offline: () => { if (sys.viewerLock) throw new Error('View-only user: offline mode band hai'); setTimeout(() => backToLocal('user'), 30); return true; },
+  offline: () => { if (sys.viewerLock) throw new Error('View-only user: offline mode is not available'); setTimeout(() => backToLocal('user'), 30); return true; },
   retry: () => { loadCloud(); return true; },
-  setServer: async (url) => { if (sys.viewerLock) throw new Error('View-only user: server badal nahi sakte'); const base = await checkServer(url); setTimeout(() => switchMode('cloud', base), 30); return true; },
-  resetServer: () => { setTimeout(() => switchMode('cloud', null), 30); return true; },
   saveFile: async (name, mime, b64) => {
     const ext = (String(name).match(/\.([a-z0-9]{1,6})$/i) || [, 'bin'])[1]; const base = String(name).replace(/\.[a-z0-9]{1,6}$/i, '');
     const r = process.env.RS_E2E && process.env.RS_E2E_SAVE_DIR ? { filePath: uniqueFile(process.env.RS_E2E_SAVE_DIR, base, ext) }   // tests: no dialog
@@ -444,6 +434,15 @@ const SHELL = {
     const file = uniqueFile(path.join(paths().pdf, 'Online'), name || 'Document', 'pdf');
     fs.writeFileSync(file, await htmlToPdf(String(html || ''))); if (silent) shell.showItemInFolder(file); else previewPdf(file, name);
     return { file };
+  },
+  // v2.3 document viewer › Download PDF: a real PDF, saved where the user picks (default Documents\R&S Sons PDFs\Online)
+  savePdfAs: async (html, name) => {
+    const def = uniqueFile(path.join(paths().pdf, 'Online'), name || 'Document', 'pdf');
+    const r = process.env.RS_E2E && process.env.RS_E2E_SAVE_DIR ? { filePath: uniqueFile(process.env.RS_E2E_SAVE_DIR, name || 'Document', 'pdf') }
+      : await dialog.showSaveDialog(win, { defaultPath: def, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
+    if (!r || r.canceled || !r.filePath) return null;
+    const pdf = await htmlToPdf(String(html || '')); fs.writeFileSync(r.filePath, pdf); if (!process.env.RS_E2E) shell.showItemInFolder(r.filePath);
+    return { file: r.filePath, size: pdf.length };
   },
   print: async (html) => printHtml(String(html || '')),
 };
@@ -477,7 +476,6 @@ function createCloudWindow() {
   win.webContents.on('before-input-event', async (e, input) => {
     if (input.type !== 'keyDown') return;
     if (input.control && input.shift && input.key === 'F12') win.webContents.openDevTools({ mode: 'detach' });
-    if (input.control && input.shift && input.key.toLowerCase() === 'l' && !sys.viewerLock) { const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Cancel', 'Offline mode'], defaultId: 1, message: 'Offline mode kholein? (sirf is PC ki files) · Switch to offline mode (company files on this PC)?' }); if (r.response === 1) backToLocal('user'); }
   });
   let crashes = 0;
   win.webContents.on('render-process-gone', (e, d) => { startupLog(`screen process ended: ${d.reason}`); if (d.reason !== 'clean-exit' && win && !win.isDestroyed() && ++crashes <= 3) loadCloud(); });

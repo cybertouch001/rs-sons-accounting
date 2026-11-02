@@ -62,6 +62,7 @@ function createService(env) {
   // ---------- v2.2 email OTP + live-update helpers ----------
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const OTP_TTL_MS = 10 * 60000, OTP_TRIES = 5, OTP_RESEND_MS = 30000, OTP_MAX_SENDS = 5, OTP_HOURLY = 10;
+  const RESET_TTL_MS = 10 * 60000, RESET_TRIES = 5, RESET_RESEND_MS = 60000, RESET_USER_HOURLY = 4, RESET_IP_HOURLY = 12;   // v2.3 password reset
   function maskEmail(e) { e = String(e || ''); const [a, d] = e.split('@'); if (!d) return e; return (a.length <= 2 ? a[0] + '*' : a.slice(0, 2) + '*'.repeat(Math.min(6, a.length - 2))) + '@' + d; }
   function backupList(u) { try { const a = JSON.parse(u.backup_codes || '[]'); return Array.isArray(a) ? a : []; } catch (_) { return []; } }
   async function otpRequired(u) {
@@ -77,18 +78,24 @@ function createService(env) {
   }
   function mailHint(m, e) {
     const s = String(e && e.message || e);
-    if (e && e.smtpCode === 535 || /AUTH|Username and Password not accepted|BadCredentials/i.test(s)) return (m.provider === 'gmail' ? 'Gmail ne login mana kiya — Gmail ka normal password nahi chalega: Google Account → Security → 2-Step Verification ON → App passwords se 16 letter ka App Password banakar daalein. ' : 'Email login galat hai (username / password). ') + '[' + s.slice(0, 160) + ']';
-    if (/did not answer|closed|ECONN|connect|network/i.test(s)) return 'Email server se connect nahi hua (host/port check karein): ' + s.slice(0, 160);
-    return 'Email nahi gaya: ' + s.slice(0, 200);
+    if (e && e.smtpCode === 535 || /AUTH|Username and Password not accepted|BadCredentials/i.test(s)) return (m.provider === 'gmail' ? 'Gmail refused the login — the normal Gmail password does not work here: Google Account → Security → turn 2-Step Verification ON → App passwords → make a 16-letter App Password and enter it. ' : 'The email login is wrong (username / password). ') + '[' + s.slice(0, 160) + ']';
+    if (/did not answer|closed|ECONN|connect|network/i.test(s)) return 'Could not connect to the email server (check host / port): ' + s.slice(0, 160);
+    return 'The email was not sent: ' + s.slice(0, 200);
   }
   async function sendOtpMail(u, code, ctx) {
     const name = await appName(); const when = new Date(ctx.now + 5.5 * 3600000).toISOString().replace('T', ' ').slice(0, 16) + ' IST';
-    const text = `Namaste ${u.full_name || u.username},\n\nAapka ${name} login OTP hai: ${code}\n\nYe 10 minute tak chalega. Ye code kisi ko mat batayein — hamari team kabhi OTP nahi maangti.\nAgar ye login aapne nahi kiya, to turant apna password badlein aur admin ko batayein.\n\nYour login code is ${code} (valid for 10 minutes).\n\nUser: ${u.username} · ${when}${ctx.ip ? ' · IP ' + ctx.ip : ''}\n— ${name}`;
-    const html = `<div style="font-family:Arial,sans-serif;max-width:460px;margin:auto;padding:18px;border:1px solid #dde3ea;border-radius:10px"><div style="font-size:15px;color:#1f3a5f;font-weight:bold">${esc(name)}</div><p style="font-size:14px;color:#333">Namaste ${esc(u.full_name || u.username)}, aapka login OTP:</p><div style="font-size:32px;letter-spacing:8px;font-weight:bold;color:#0b7a75;margin:10px 0">${code}</div><p style="font-size:13px;color:#555">10 minute tak valid. Ye code kisi ko mat batayein.<br>Agar ye login aapne nahi kiya, to turant password badlein aur admin ko batayein.</p><p style="font-size:12px;color:#888">Your login code (valid 10 minutes). User: ${esc(u.username)} · ${when}${ctx.ip ? ' · IP ' + esc(ctx.ip) : ''}</p></div>`;
-    return sendMail(u.email, `${code} — ${name} login OTP`, text, html);
+    const text = `Hello ${u.full_name || u.username},\n\nYour ${name} login code is: ${code}\n\nIt is valid for 10 minutes. Do not share this code with anyone — we never ask for it.\nIf you did not try to log in, change your password now and tell your admin.\n\nUser: ${u.username} · ${when}${ctx.ip ? ' · IP ' + ctx.ip : ''}\n— ${name}`;
+    const html = `<div style="font-family:Arial,sans-serif;max-width:460px;margin:auto;padding:18px;border:1px solid #dde3ea;border-radius:10px"><div style="font-size:15px;color:#1f3a5f;font-weight:bold">${esc(name)}</div><p style="font-size:14px;color:#333">Hello ${esc(u.full_name || u.username)}, your login code:</p><div style="font-size:32px;letter-spacing:8px;font-weight:bold;color:#0b7a75;margin:10px 0">${code}</div><p style="font-size:13px;color:#555">Valid for 10 minutes. Do not share this code with anyone.<br>If you did not try to log in, change your password now and tell your admin.</p><p style="font-size:12px;color:#888">User: ${esc(u.username)} · ${when}${ctx.ip ? ' · IP ' + esc(ctx.ip) : ''}</p></div>`;
+    return sendMail(u.email, `${code} — ${name} login code`, text, html);
+  }
+  async function sendResetMail(u, code, ctx) {
+    const name = await appName(); const when = new Date(ctx.now + 5.5 * 3600000).toISOString().replace('T', ' ').slice(0, 16) + ' IST';
+    const text = `Hello ${u.full_name || u.username},\n\nSomeone asked to reset the ${name} password of user "${u.username}".\nYour password reset code is: ${code}\n\nEnter it in the app (login screen › Forgot password?) to set a new password. It is valid for 10 minutes and works once.\nIf you did not ask for this, ignore this email — your password stays the same — and tell your admin.\n\nUser: ${u.username} · ${when}${ctx.ip ? ' · IP ' + ctx.ip : ''}\n— ${name}`;
+    const html = `<div style="font-family:Arial,sans-serif;max-width:460px;margin:auto;padding:18px;border:1px solid #dde3ea;border-radius:10px"><div style="font-size:15px;color:#1f3a5f;font-weight:bold">${esc(name)}</div><p style="font-size:14px;color:#333">Hello ${esc(u.full_name || u.username)}, your password reset code for user <b>${esc(u.username)}</b>:</p><div style="font-size:32px;letter-spacing:8px;font-weight:bold;color:#0b7a75;margin:10px 0">${code}</div><p style="font-size:13px;color:#555">Enter it in the app (login screen › <b>Forgot password?</b>) to set a new password. Valid for 10 minutes, works once.<br>If you did not ask for this, ignore this email — your password stays the same — and tell your admin.</p><p style="font-size:12px;color:#888">User: ${esc(u.username)} · ${when}${ctx.ip ? ' · IP ' + esc(ctx.ip) : ''}</p></div>`;
+    return sendMail(u.email, `${code} — ${name} password reset code`, text, html);
   }
   async function startChallenge(ctx, u, remember) {
-    if (await sys.recentChallenges(u.id, ctx.now - 3600000) >= OTP_HOURLY) throw new ApiError('Is ghante bahut OTP bheje gaye — 1 ghante baad try karein · Too many codes this hour, try later.', 'otp_limit', 429);
+    if (await sys.recentChallenges(u.id, ctx.now - 3600000) >= OTP_HOURLY) throw new ApiError('Too many codes were sent this hour. Please try again in an hour.', 'otp_limit', 429);
     const challenge = CR.randomToken(); const h = await CR.sha256Hex(challenge); const code = await newCode();
     let mailOk = 1, err = '';
     try { await sendOtpMail(u, code, ctx); } catch (e) { mailOk = 0; err = e.message || String(e); }
@@ -96,7 +103,7 @@ function createService(env) {
     if (Math.random() < 0.1) await sys.purgeChallenges(ctx.now - 2 * 3600000);
     await sys.log(u.username, mailOk ? 'Login OTP sent' : 'Login OTP email FAILED', mailOk ? maskEmail(u.email) : err.slice(0, 200), ctx.ip);
     return { otp: true, challenge, sentTo: maskEmail(u.email), expiresIn: OTP_TTL_MS / 1000, resendIn: OTP_RESEND_MS / 1000, tries: OTP_TRIES, hasBackup: backupList(u).length > 0,
-      mailFailed: !mailOk, error: mailOk ? '' : 'OTP email nahi gaya · Could not send the email. Admin se kahein (Admin Settings → Email OTP), ya backup code use karein.' };
+      mailFailed: !mailOk, error: mailOk ? '' : 'Could not send the code email. Ask your admin (Admin Settings → Email), or use a backup code.' };
   }
   async function startSession(ctx, u, remember, how) {
     const token = CR.randomToken(); const th = await CR.sha256Hex(token);
@@ -166,7 +173,7 @@ function createService(env) {
     const r = await h(ctx, ...a);
     return r === undefined ? null : r;
   }
-  const BATCH_NO = new Set(['auth.login', 'auth.logout', 'auth.changePassword', 'auth.verifyOtp', 'auth.resendOtp', 'mail.test']);   // these set/clear the login cookie
+  const BATCH_NO = new Set(['auth.login', 'auth.logout', 'auth.changePassword', 'auth.verifyOtp', 'auth.resendOtp', 'auth.forgotPassword', 'auth.resetPassword', 'mail.test']);   // these set/clear the login cookie
   function need(ctx, role) {
     if (!ctx.user) throw new ApiError('Please log in', 'auth', 401);
     if (!PERMS.allowed(ctx.user.role, role)) throw new ApiError(`Your user role (${ctx.user.role}) is not allowed to do this. Ask the admin.`, 'forbidden', 403);
@@ -198,7 +205,7 @@ function createService(env) {
     return { id, name: nm };
   }
 
-  const PUBLIC = new Set(['app.info', 'auth.login', 'auth.logout', 'auth.verifyOtp', 'auth.resendOtp']);
+  const PUBLIC = new Set(['app.info', 'auth.login', 'auth.logout', 'auth.verifyOtp', 'auth.resendOtp', 'auth.forgotPassword', 'auth.resetPassword']);
   const MUSTCHANGE_OK = new Set(['auth.changePassword', 'admin.passwordStrength']);
 
   const H = {
@@ -229,10 +236,67 @@ function createService(env) {
       if (await otpRequired(u)) return startChallenge(ctx, u, remember);
       return startSession(ctx, u, remember, '');
     },
+    // ---- v2.3 "Forgot password?": a 6-digit reset code goes to the user's registered email (10 minutes, 5 tries, one use).
+    //      A backup code (Utilities › Login OTP & backup codes) works in place of the email code. Rate-limited per user and per network.
+    'auth.forgotPassword': async (ctx, username) => {
+      const uname = String(username || '').trim().toLowerCase().slice(0, 60);
+      if (!uname) throw new ApiError('Enter your username');
+      const ipk = 'fp-ip:' + ctx.ip; const ipa = await sys.attempt(ipk);
+      const ipFails = ipa && Number(ipa.last) > ctx.now - 3600000 ? Number(ipa.fails || 0) : 0;
+      if (ipFails >= RESET_IP_HOURLY) throw new ApiError('Too many password reset requests from this network. Please try again in an hour.', 'reset_limit', 429);
+      await sys.setAttempt(ipk, ipFails + 1, 0, ctx.now);
+      const challenge = CR.randomToken(); const h = await CR.sha256Hex(challenge);
+      const u = await sys.userByName(uname);
+      const generic = { challenge, sentTo: '', expiresIn: RESET_TTL_MS / 1000, mailFailed: false, error: '', hasBackup: false };
+      if (!u || !u.active) { await sys.log(uname, 'Password reset asked (no such active user)', '', ctx.ip); return generic; }   // same answer, nothing sent
+      if (await sys.recentResets(u.id, ctx.now - 3600000) >= RESET_USER_HOURLY) throw new ApiError('Too many password reset codes were sent for this user. Please try again in an hour.', 'reset_limit', 429);
+      const last = await sys.get('SELECT MAX(created_at) AS t FROM pw_resets WHERE user_id=?', [u.id]);
+      const wait = last && last.t ? Math.ceil((Number(last.t) + RESET_RESEND_MS - ctx.now) / 1000) : 0;
+      if (wait > 0) throw new ApiError(`A code was just sent. You can ask again in ${wait} s.`, 'reset_wait', 429);
+      const code = await newCode(); let mailOk = 0, err = '';
+      const mail = await sys.kv('mail', {}) || {};
+      if (!u.email) err = 'No email is registered for this user. Ask your admin to set it (Users & Roles), or use a backup code.';
+      else if (!mail.user || !mail.pass || !env.netOpen) err = 'Password reset by email is not set up yet: the admin must save the sending Gmail in Admin › Email settings. You can still use a backup code, or ask another admin.';
+      else { try { await sendResetMail(u, code, ctx); mailOk = 1; } catch (e) { err = 'The reset email could not be sent (' + String(e.message || e).slice(0, 160) + '). You can use a backup code, or ask your admin.'; } }
+      await sys.invalidateUserResets(u.id);   // only the newest code works
+      await sys.addReset({ id_hash: h, user_id: u.id, code_hash: mailOk ? await CR.sha256Hex(h + ':' + code) : '', now: ctx.now, expires_at: ctx.now + RESET_TTL_MS, ip: ctx.ip, mail_ok: mailOk });
+      if (Math.random() < 0.2) await sys.purgeResets(ctx.now - 24 * 3600000);
+      await sys.log(u.username, mailOk ? 'Password reset code sent' : 'Password reset asked (email not sent)', mailOk ? maskEmail(u.email) : err.slice(0, 200), ctx.ip);
+      return Object.assign(generic, { sentTo: mailOk ? maskEmail(u.email) : '', mailFailed: !mailOk, error: mailOk ? '' : err, hasBackup: backupList(u).length > 0 });
+    },
+    'auth.resetPassword': async (ctx, challenge, code, newPw, repeatPw) => {
+      const h = await CR.sha256Hex(String(challenge || '')); const r = challenge ? await sys.reset(h) : null;
+      if (!r) throw new ApiError('This reset code is not valid any more. Please start again with "Forgot password?".', 'reset_expired', 401);
+      if (Number(r.expires_at) < ctx.now) throw new ApiError(Number(r.expires_at) === 0 ? 'This reset code is not valid any more (it was used, or a newer code was sent). Please start again.' : 'The reset code expired (10 minutes). Please start again.', 'reset_expired', 401);
+      const u = await sys.userById(r.user_id); if (!u || !u.active) { await sys.deleteReset(h); throw new ApiError('This reset code is not valid any more. Please start again.', 'reset_expired', 401); }
+      if (repeatPw !== undefined && String(newPw) !== String(repeatPw)) throw new ApiError('The two new passwords do not match');
+      const chk = ADM.checkPassword(newPw, { username: u.username }); if (!chk.ok) throw new ApiError('New password: ' + chk.errors.join('; '));
+      const raw = String(code || '').trim(); const digits = raw.replace(/\D/g, '');
+      let ok = false, how = 'email code', list = null;
+      if (/^\d{6}$/.test(digits) && raw.replace(/[\s-]/g, '') === digits) ok = !!r.code_hash && (await CR.sha256Hex(h + ':' + digits)) === r.code_hash;
+      else { const bc = raw.toUpperCase().replace(/[^A-Z0-9]/g, ''); if (bc.length === 8) { list = backupList(u); const i = list.indexOf(await CR.sha256Hex(u.id + ':' + bc)); if (i >= 0) { list.splice(i, 1); ok = true; how = 'backup code'; } } }
+      if (!ok) {
+        const tries = Number(r.attempts || 0) + 1; const left = RESET_TRIES - tries;
+        await sys.log(u.username, 'Password reset code wrong', `try ${tries} of ${RESET_TRIES}`, ctx.ip);
+        if (left <= 0) { await sys.updateReset(h, { attempts: tries, expires_at: 0, code_hash: '' }); throw new ApiError('Wrong code too many times. Please start again with "Forgot password?".', 'reset_expired', 401); }
+        await sys.updateReset(h, { attempts: tries });
+        throw new ApiError(`Wrong code (${left} ${left === 1 ? 'try' : 'tries'} left)`, 'reset_wrong', 401);
+      }
+      const f = { pw: await hashPassword(newPw), must_change: 0, pw_changed: new Date(ctx.now).toISOString() };
+      if (list) f.backup_codes = JSON.stringify(list);
+      if (how === 'email code') f.email_verified = 1;
+      await sys.updateUser(u.id, f);
+      await sys.invalidateUserResets(u.id);   // one use: this code and any older one stop working
+      await sys.deleteUserSessions(u.id, '');                        // every device of this user logs in again
+      await Promise.all(['u:' + u.username.toLowerCase(), 'ip:' + ctx.ip].map(k => sys.clearAttempt(k)));
+      await sys.log(u.username, 'Password reset', 'with ' + how, ctx.ip);
+      if (u.email) { try { await sendMail(u.email, `${await appName()} — your password was changed`, `Hello ${u.full_name || u.username},\n\nThe password of user "${u.username}" was just changed with "Forgot password?" (${how}).\nIf this was not you, tell your admin at once.\n\n— ${await appName()}`, null); } catch (_) {} }
+      return { ok: true, username: u.username };
+    },
     'auth.verifyOtp': async (ctx, challenge, code) => {
       const h = await CR.sha256Hex(String(challenge || '')); const ch = challenge ? await sys.challenge(h) : null;
-      if (!ch) throw new ApiError('OTP ka samay khatam ho gaya — dobara login karein · Please log in again.', 'otp_expired', 401);
-      if (Number(ch.expires_at) < ctx.now) { await sys.deleteChallenge(h); throw new ApiError('OTP expire ho gaya (10 minute) — dobara login karein · The code expired, please log in again.', 'otp_expired', 401); }
+      if (!ch) throw new ApiError('The code has expired. Please log in again.', 'otp_expired', 401);
+      if (Number(ch.expires_at) < ctx.now) { await sys.deleteChallenge(h); throw new ApiError('The code expired (10 minutes). Please log in again.', 'otp_expired', 401); }
       const u = await sys.userById(ch.user_id); if (!u || !u.active) { await sys.deleteChallenge(h); throw new ApiError('User is not active', 'bad_login', 401); }
       const at = await sys.attempt('u:' + u.username.toLowerCase()); if (at && Number(at.until) > ctx.now) throw new ApiError(`Too many wrong attempts. Try again in ${Math.ceil((Number(at.until) - ctx.now) / 1000)} s.`, 'rate_limited', 429);
       const raw = String(code || '').trim(); const digits = raw.replace(/\D/g, '');
@@ -244,9 +308,9 @@ function createService(env) {
         const k = 'u:' + u.username.toLowerCase(); const a2 = await sys.attempt(k) || { fails: 0 }; const fails = Number(a2.fails || 0) + 1;
         await sys.setAttempt(k, fails, fails >= 5 ? ctx.now + Math.min(15 * 60000, 60000 * Math.pow(2, Math.floor(fails / 5) - 1)) : 0, ctx.now);
         await sys.log(u.username, 'Login OTP wrong', `try ${tries} of ${OTP_TRIES}`, ctx.ip);
-        if (left <= 0) { await sys.deleteChallenge(h); throw new ApiError('Galat OTP — 5 baar galat ho gaya, dobara login karein · Wrong code too many times, please log in again.', 'otp_expired', 401); }
+        if (left <= 0) { await sys.deleteChallenge(h); throw new ApiError('Wrong code too many times. Please log in again.', 'otp_expired', 401); }
         await sys.updateChallenge(h, { attempts: tries });
-        throw new ApiError(`Galat OTP · Wrong code (${left} ${left === 1 ? 'try' : 'tries'} left)`, 'otp_wrong', 401);
+        throw new ApiError(`Wrong code (${left} ${left === 1 ? 'try' : 'tries'} left)`, 'otp_wrong', 401);
       }
       await sys.deleteChallenge(h); await sys.clearAttempt('u:' + u.username.toLowerCase());
       if (!Number(u.email_verified)) await sys.updateUser(u.id, { email_verified: 1 });
@@ -254,16 +318,16 @@ function createService(env) {
     },
     'auth.resendOtp': async (ctx, challenge) => {
       const h = await CR.sha256Hex(String(challenge || '')); const ch = challenge ? await sys.challenge(h) : null;
-      if (!ch || Number(ch.expires_at) < ctx.now) throw new ApiError('OTP ka samay khatam ho gaya — dobara login karein · Please log in again.', 'otp_expired', 401);
-      const wait = Math.ceil((Number(ch.last_sent) + OTP_RESEND_MS - ctx.now) / 1000); if (wait > 0) throw new ApiError(`${wait} second baad dobara bhej sakte hain · Wait ${wait} s to resend.`, 'otp_wait', 429);
-      if (Number(ch.sends) >= OTP_MAX_SENDS) throw new ApiError('Bahut baar bheja ja chuka — thodi der baad dobara login karein · Too many resends, log in again later.', 'otp_limit', 429);
+      if (!ch || Number(ch.expires_at) < ctx.now) throw new ApiError('The code has expired. Please log in again.', 'otp_expired', 401);
+      const wait = Math.ceil((Number(ch.last_sent) + OTP_RESEND_MS - ctx.now) / 1000); if (wait > 0) throw new ApiError(`You can resend in ${wait} s.`, 'otp_wait', 429);
+      if (Number(ch.sends) >= OTP_MAX_SENDS) throw new ApiError('Too many resends. Please log in again later.', 'otp_limit', 429);
       const u = await sys.userById(ch.user_id); if (!u || !u.active || !u.email) throw new ApiError('User is not active', 'bad_login', 401);
-      if (await sys.recentChallenges(u.id, ctx.now - 3600000) >= OTP_HOURLY) throw new ApiError('Is ghante bahut OTP bheje gaye — 1 ghante baad try karein · Too many codes this hour.', 'otp_limit', 429);
+      if (await sys.recentChallenges(u.id, ctx.now - 3600000) >= OTP_HOURLY) throw new ApiError('Too many codes were sent this hour. Please try again in an hour.', 'otp_limit', 429);
       const code = await newCode(); let mailOk = 1, err = '';
       try { await sendOtpMail(u, code, ctx); } catch (e) { mailOk = 0; err = e.message; }
       await sys.updateChallenge(h, { code_hash: await CR.sha256Hex(h + ':' + code), sends: Number(ch.sends) + 1, last_sent: ctx.now, expires_at: ctx.now + OTP_TTL_MS, mail_ok: mailOk });
       await sys.log(u.username, mailOk ? 'Login OTP re-sent' : 'Login OTP email FAILED', mailOk ? maskEmail(u.email) : err, ctx.ip);
-      if (!mailOk) throw new ApiError('OTP email nahi gaya · Could not send the email: ' + err + '. Admin se kahein (Admin Settings → Email OTP), ya backup code use karein.', 'otp_mail_failed', 502);
+      if (!mailOk) throw new ApiError('Could not send the code email: ' + err + '. Ask your admin (Admin Settings → Email), or use a backup code.', 'otp_mail_failed', 502);
       return { sentTo: maskEmail(u.email), expiresIn: OTP_TTL_MS / 1000, resendIn: OTP_RESEND_MS / 1000 };
     },
     'auth.backupCodes': async (ctx, pw) => {
@@ -301,7 +365,7 @@ function createService(env) {
       if (m.user && !/^\S+$/.test(m.user)) throw new ApiError('Email login (username) is not valid');
       if (provider === 'gmail') { if (m.user) MAIL.cleanAddr(m.user); }
       if (m.from) MAIL.cleanAddr(m.from);
-      if (provider === 'smtp') { m.host = String(s.host || '').trim(); m.port = Number(s.port) || 587; m.secure = s.secure === 'ssl' ? 'ssl' : s.secure === 'none' ? 'none' : 'starttls'; if (!/^[a-z0-9.-]+$/i.test(m.host)) throw new ApiError('SMTP host is not valid'); if (m.secure === 'none' && !/^(localhost|127\.0\.0\.1)$/.test(m.host)) throw new ApiError('Bina encryption sirf isi computer ke relay (localhost) ke liye · No-encryption only for localhost'); if (m.port === 25) throw new ApiError('Port 25 is blocked on the hosted server — use 465 (SSL) or 587 (STARTTLS)'); }
+      if (provider === 'smtp') { m.host = String(s.host || '').trim(); m.port = Number(s.port) || 587; m.secure = s.secure === 'ssl' ? 'ssl' : s.secure === 'none' ? 'none' : 'starttls'; if (!/^[a-z0-9.-]+$/i.test(m.host)) throw new ApiError('SMTP host is not valid'); if (m.secure === 'none' && !/^(localhost|127\.0\.0\.1)$/.test(m.host)) throw new ApiError('No encryption is allowed only for a relay on this computer (localhost)'); if (m.port === 25) throw new ApiError('Port 25 is blocked on the hosted server — use 465 (SSL) or 587 (STARTTLS)'); }
       const pass = String(s.pass || '').replace(/\s+/g, provider === 'gmail' ? '' : ' ').trim();
       m.pass = pass || old.pass || '';
       const same = ['provider', 'user', 'host', 'port', 'secure', 'from'].every(k => String(m[k] || '') === String(old[k] || '')) && m.pass === old.pass;
@@ -313,10 +377,10 @@ function createService(env) {
     },
     'mail.test': async (ctx, to) => {
       need(ctx, 'admin'); const m = await sys.kv('mail', {}) || {}; to = String(to || ctx.user.email || m.user || '').trim();
-      if (!to) throw new ApiError('Test mail kis email pe bheje? Pehle apna email daalein.');
+      if (!to) throw new ApiError('Which email should the test mail go to? Enter your email first.');
       MAIL.cleanAddr(to);
       try {
-        const r = await sendMail(to, `${await appName()} — test mail ✔`, `Ye test mail hai. Email OTP ki settings sahi hain.\nThis is a test mail: the email (OTP) settings work.\n\n${await appName()}`, null);
+        const r = await sendMail(to, `${await appName()} — test mail ✔`, `This is a test mail: the email settings work (login codes and password reset codes can be sent).\n\n${await appName()}`, null);
         m.testedOk = true; m.testedAt = new Date(ctx.now).toISOString(); m.lastError = ''; await sys.setKv('mail', m);
         await sys.log(ctx.user.username, 'Test mail sent', maskEmail(to), ctx.ip);
         return { ok: true, to: maskEmail(to), id: r.id };
@@ -328,7 +392,7 @@ function createService(env) {
     },
     'otp.setEnabled': async (ctx, on) => {
       need(ctx, 'admin'); const m = await sys.kv('mail', {}) || {};
-      if (on && !m.testedOk) throw new ApiError('Pehle "Test mail bhejo" successful karein, tab OTP chalu hoga · Send a successful test mail first.');
+      if (on && !m.testedOk) throw new ApiError('Send a successful test mail first, then OTP can be turned on.');
       await sys.setKv('otp', { enabled: !!on, by: ctx.user.username, at: new Date(ctx.now).toISOString() });
       await sys.log(ctx.user.username, on ? 'Email OTP turned ON' : 'Email OTP turned OFF', on ? 'users with an email get a code at login' : 'logins need only the password', ctx.ip);
       return H['mail.get'](ctx);
@@ -525,6 +589,19 @@ function createService(env) {
     if (await sys.userCount() > 0) return false;
     await sys.addUser({ username: username || 'admin', pw: isHash ? pwHashOrPlain : await hashPassword(pwHashOrPlain), role: 'admin', must_change: true });
     await sys.log('system', 'Admin account created', username || 'admin', ''); return true;
+  },
+  // v2.3: a one-time admin password reset asked for by the owner (the new password is sent to him by email, never stored here —
+  // only its hash). Runs once per reset id; also fills in the admin's registered email when none is set.
+  async applyAdminReset(cfg) {
+    if (!cfg || !cfg.id || !cfg.username || !/^pbkdf2-sha256\$\d+\$[0-9a-f]+\$[0-9a-f]{64}$/.test(String(cfg.pw || ''))) return false;
+    if (await sys.kv('admin_reset_done', null) === cfg.id) return false;
+    const u = await sys.userByName(cfg.username); if (!u || u.role !== 'admin') { await sys.setKv('admin_reset_done', cfg.id); return false; }
+    const f = { pw: cfg.pw, must_change: 1, pw_changed: new Date().toISOString(), active: 1 };
+    if (!u.email && cfg.email) f.email = String(cfg.email).trim().toLowerCase();
+    await sys.updateUser(u.id, f); await sys.deleteUserSessions(u.id, ''); await sys.deleteUserResets(u.id);
+    await sys.clearAttempt('u:' + u.username.toLowerCase());
+    await sys.setKv('admin_reset_done', cfg.id);
+    await sys.log('system', 'Admin password reset (one time, owner request)', u.username + (f.email ? ' · email set ' + maskEmail(f.email) : ''), ''); return true;
   } };
 }
 module.exports = { createService, ApiError };

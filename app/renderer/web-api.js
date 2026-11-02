@@ -19,9 +19,9 @@
   function paintNet() {
     const b = bar(); const slow = NET.pending ? Date.now() - NET.since : 0;
     let html = '', cls = '';
-    if (NET.offline) { html = '📴 <b>Internet nahi hai</b> · No internet — jab internet aayega tab kaam chalega'; cls = 'off'; }
-    else if (NET.pending && slow > 7000) { html = '<span class="spin"></span> <b>Server jag raha hai…</b> pehli baar 10-30 sec lag sakte hain · Server is waking up, please wait'; cls = 'slow'; }
-    else if (NET.pending && slow > 1200) { html = '<span class="spin"></span> Connecting… · जुड़ रहा है'; cls = 'busy'; }
+    if (NET.offline) { html = '📴 <b>No internet</b> — the app will continue when the internet is back'; cls = 'off'; }
+    else if (NET.pending && slow > 7000) { html = '<span class="spin"></span> <b>Server is waking up…</b> the first time can take 10–30 seconds, please wait'; cls = 'slow'; }
+    else if (NET.pending && slow > 1200) { html = '<span class="spin"></span> Connecting…'; cls = 'busy'; }
     b.className = html ? cls : 'hidden'; if (b.innerHTML !== html) b.innerHTML = html;
     document.documentElement.classList.toggle('net-busy', !!html && cls !== 'off');
   }
@@ -30,9 +30,9 @@
   window.addEventListener('offline', () => { NET.offline = true; paintNet(); });
   window.addEventListener('online', () => { NET.offline = false; paintNet(); });
   function netError(kind) {
-    const e = new Error(kind === 'timeout' ? 'Server ne time par jawab nahi diya — dobara try karo. (The server took too long, please try again.)'
-      : !navigator.onLine ? 'Internet nahi mil raha — internet check karke dobara try karo. (No internet connection.)'
-      : 'Server tak nahi pahunch paaye — thodi der baad dobara try karo. (Cannot reach the server, please try again.)');
+    const e = new Error(kind === 'timeout' ? 'The server took too long to answer. Please try again.'
+      : !navigator.onLine ? 'No internet connection. Check your internet and try again.'
+      : 'Cannot reach the server. Please try again in a little while.');
     e.code = kind; return e;
   }
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -80,7 +80,7 @@
   function download(f) {
     if (DROID && DROID.saveFile) {   // Android: saved in Downloads, then Open / Share
       let r = {}; try { r = JSON.parse(DROID.saveFile(f.name, f.mime || 'application/octet-stream', f.b64) || '{}'); } catch (e) { r = { error: e.message }; }
-      if (r.error) throw new Error('File save nahi hui: ' + r.error);
+      if (r.error) throw new Error('File was not saved: ' + r.error);
       return { file: r.file || f.name, size: f.size, downloaded: true };
     }
     if (SHELL && SHELL.saveFile) return SHELL.saveFile(f.name, f.mime || 'application/octet-stream', f.b64).then(r => r ? { file: r.file, size: f.size } : null);
@@ -97,22 +97,61 @@
       setTimeout(() => { if (document.body.contains(i) && !i.files.length) { /* user may still be choosing */ } }, 60000);
     });
   }
-  // Document viewer: shows the printable page with "Print / Save as PDF" (the browser's print dialog makes the PDF; works on phones too)
-  function showDoc(html, title, autoPrint) {
+  // v2.3 document viewer (all users, viewers too): the exact page that goes into the PDF, with Download PDF · Print · Share.
+  //   Windows app: a real PDF file (save dialog / Documents\R&S Sons PDFs) · Android: a real PDF in Downloads, the share sheet
+  //   (WhatsApp, Gmail, Drive…) and the phone's print service · browser: the print dialog ("Save as PDF") and WhatsApp / email links.
+  let DOC = { html: '', name: 'Document', share: null };
+  function docMsg(t) { const m = document.querySelector('#docview .dv-m'); if (m) { m.textContent = t || ''; m.classList.toggle('hidden', !t); } }
+  function printFrame() { const f = document.querySelector('#docview .dv-f'); try { f.contentWindow.focus(); f.contentWindow.print(); } catch (e) { alert('Printing is blocked here. Use the browser menu › Print.'); } }
+  async function docDownload() {
+    try {
+      if (SHELL && SHELL.savePdfAs) { const r = await SHELL.savePdfAs(DOC.html, DOC.name); if (r && r.file) docMsg('PDF saved: ' + r.file); return r; }
+      if (SHELL && SHELL.savePdf) { const r = await SHELL.savePdf(DOC.html, DOC.name, true); if (r && r.file) docMsg('PDF saved: ' + r.file); return r; }
+      if (DROID && DROID.savePdf) { DROID.savePdf(DOC.html, DOC.name); docMsg('Making the PDF — it is saved in Downloads › RS Sons Accounting.'); return true; }
+      if (DROID && DROID.sharePdf) { DROID.sharePdf(DOC.html, DOC.name, ''); return true; }
+      docMsg('In the print window choose "Save as PDF" as the printer, then Save.'); printFrame(); return true;
+    } catch (e) { docMsg('Could not save the PDF: ' + (e.message || e)); }
+  }
+  function docPrint() {
+    if (SHELL && SHELL.print) return SHELL.print(DOC.html).catch(e => docMsg('Could not print: ' + (e.message || e)));
+    if (DROID && DROID.printHtml) return DROID.printHtml(DOC.html, DOC.name);
+    printFrame();
+  }
+  function shareLinks() {
+    const s = DOC.share || {}; const text = s.text || DOC.name;
+    return { whatsapp: s.whatsapp || 'https://wa.me/?text=' + encodeURIComponent(text), mailto: s.mailto || 'mailto:?subject=' + encodeURIComponent(DOC.name) + '&body=' + encodeURIComponent(text + '\n\n(PDF attached)') };
+  }
+  async function docShare() {
+    if (DROID && DROID.sharePdf) { DROID.sharePdf(DOC.html, DOC.name, (DOC.share && DOC.share.text) || ''); return; }   // phone: the real PDF → share sheet
+    let saved = null;
+    if (SHELL && SHELL.savePdf) { try { saved = await SHELL.savePdf(DOC.html, DOC.name, true); } catch (e) { docMsg('Could not save the PDF: ' + (e.message || e)); return; } }
+    const L = shareLinks(); const box = document.querySelector('#docview .dv-sh');
+    box.innerHTML = '<b>Share</b><span>' + (saved && saved.file ? 'PDF saved (the folder is open) — attach it in WhatsApp / email: ' + esc(saved.file) : 'Save the PDF first (Download PDF), then attach it.') + '</span>'
+      + '<button class="btn sm" data-sh="wa">WhatsApp</button><button class="btn sm" data-sh="mail">Email</button>' + (navigator.share && !SHELL ? '<button class="btn sm" data-sh="more">More…</button>' : '') + '<button class="btn sm" data-sh="x">✕</button>';
+    box.classList.remove('hidden');
+    box.onclick = e => { const b = e.target.closest('[data-sh]'); if (!b) return; const k = b.dataset.sh;
+      if (k === 'wa') window.open(L.whatsapp, '_blank', 'noopener'); else if (k === 'mail') window.open(L.mailto, '_blank', 'noopener');
+      else if (k === 'more') navigator.share({ title: DOC.name, text: (DOC.share && DOC.share.text) || DOC.name }).catch(() => {});
+      else box.classList.add('hidden'); };
+  }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+  function showDoc(html, title, autoPrint, share) {
     let ov = document.getElementById('docview');
     if (!ov) {
       ov = document.createElement('div'); ov.id = 'docview';
-      ov.innerHTML = '<div class="dv-bar"><b class="dv-t"></b><span style="flex:1"></span>' + (DROID && DROID.sharePdf ? '<button class="btn primary dv-s">📤 Share PDF</button>' : '') + '<button class="btn ' + (DROID && DROID.sharePdf ? '' : 'primary ') + 'dv-p">🖨 Print / Save as PDF</button><button class="btn dv-c">Close (Esc)</button></div><iframe class="dv-f" title="Document"></iframe>';
+      ov.innerHTML = '<div class="dv-bar"><b class="dv-t"></b><span style="flex:1"></span><button class="btn primary dv-d" title="Save the PDF file">⬇ Download PDF</button><button class="btn dv-p" title="Print (Ctrl+P)">🖨 Print</button><button class="btn dv-s" title="Send the PDF (WhatsApp, email…)">📤 Share</button><button class="btn dv-c">✕ Close (Esc)</button></div><div class="dv-m hidden"></div><div class="dv-sh hidden"></div><iframe class="dv-f" title="Document"></iframe>';
       document.body.appendChild(ov);
-      if (ov.querySelector('.dv-s')) ov.querySelector('.dv-s').onclick = () => { const f = ov.querySelector('.dv-f'); DROID.sharePdf(f.srcdoc || '', ov.querySelector('.dv-t').textContent || 'Document', ''); };
+      ov.querySelector('.dv-d').onclick = docDownload; ov.querySelector('.dv-p').onclick = docPrint; ov.querySelector('.dv-s').onclick = docShare;
       ov.querySelector('.dv-c').onclick = () => { ov.classList.add('hidden'); ov.querySelector('.dv-f').srcdoc = ''; };
-      ov.querySelector('.dv-p').onclick = () => { const f = ov.querySelector('.dv-f'); if (DROID && DROID.printHtml) { DROID.printHtml(f.srcdoc || '', ov.querySelector('.dv-t').textContent || 'Document'); return; } try { f.contentWindow.focus(); f.contentWindow.print(); } catch (e) { alert('Printing is blocked here. Use the browser menu › Print.'); } };
-      document.addEventListener('keydown', e => { if (e.key === 'Escape' && !ov.classList.contains('hidden')) { e.stopPropagation(); ov.querySelector('.dv-c').click(); } }, true);
+      const keys = e => { if (ov.classList.contains('hidden')) return; if (e.key === 'Escape') { e.stopPropagation(); ov.querySelector('.dv-c').click(); } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') { e.preventDefault(); e.stopPropagation(); docPrint(); } };
+      document.addEventListener('keydown', keys, true);
+      ov.querySelector('.dv-f').addEventListener('load', () => { try { ov.querySelector('.dv-f').contentWindow.document.addEventListener('keydown', keys, true); } catch (_) {} });   // Esc / Ctrl+P with the page focused
     }
-    ov.querySelector('.dv-t').textContent = title || 'Document';
+    DOC = { html, name: title || 'Document', share: share || null };
+    ov.querySelector('.dv-t').textContent = '📄 ' + (title || 'Document'); docMsg(''); ov.querySelector('.dv-sh').classList.add('hidden');
     const f = ov.querySelector('.dv-f'); f.onload = null;
-    if (autoPrint && DROID && DROID.printHtml) { DROID.printHtml(html, title || 'Document'); autoPrint = false; }
-    if (autoPrint) f.onload = () => { setTimeout(() => { try { f.contentWindow.focus(); f.contentWindow.print(); } catch (_) {} }, 300); f.onload = null; };
+    if (autoPrint && (SHELL || DROID)) { docPrint(); autoPrint = false; }
+    if (autoPrint) f.onload = () => { setTimeout(printFrame, 300); f.onload = null; };
     f.srcdoc = html; ov.classList.remove('hidden');
   }
   function resizeIcon(dataUrl) {
@@ -120,8 +159,10 @@
   }
   async function api(m, ...a) {
     switch (m) {
-      case 'doc.pdf': case 'doc.print': if (SHELL && SHELL.savePdf) { const d = await call('doc.named', a); return m === 'doc.pdf' ? SHELL.savePdf(d.html, d.name) : SHELL.print(d.html); } // falls through
-      case 'doc.webview': { const d = await call('doc.named', a); showDoc(d.html, d.name, m === 'doc.print'); return { file: d.name + '.pdf', viewer: true }; }
+      case 'doc.print': if (SHELL && SHELL.print) { const d = await call('doc.named', a); return SHELL.print(d.html); } // falls through
+      case 'doc.pdf': case 'doc.webview': { const d = await call('doc.named', a); let sh = null;
+        if (a[0] === 'voucher' && a[1]) { try { sh = await call('doc.shareText', [a[1]]); } catch (_) {} }
+        showDoc(d.html, d.name, m === 'doc.print', sh); return { file: d.name + '.pdf', viewer: true }; }
       case 'doc.share': { const s = await call('doc.shareText', [a[1]]); const d = await call('doc.named', ['voucher', a[1], {}]);
         if (SHELL && SHELL.savePdf) { const r = await SHELL.savePdf(d.html, d.name, true); window.open(a[0] === 'whatsapp' ? s.whatsapp : s.mailto, '_blank', 'noopener'); return r; }
         if (DROID && DROID.sharePdf) { DROID.sharePdf(d.html, d.name, s.text || ''); return { file: d.name + '.pdf', shared: true }; }   // phone: real PDF → share sheet (WhatsApp)

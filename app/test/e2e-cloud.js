@@ -2,7 +2,7 @@
 //   RS_E2E_PHASE=first : login screen, wrong password, login, TEST company, sales invoice by keyboard, PDF, Excel, wait for the phone's entry
 //   RS_E2E_PHASE=again : reopen = still logged in; Logout; Offline mode opens the PC's own files; back to Online
 //   RS_E2E_PHASE=down  : server unreachable → the "no internet" page with Retry / Offline mode (no freeze, no blank window)
-//   RS_E2E_PHASE=slow  : server slow to answer → "Connecting…" then "Server jag raha hai…" (waking up) instead of a frozen window
+//   RS_E2E_PHASE=slow  : server slow to answer → "Connecting…" then "Server is waking up…" instead of a frozen window
 const fs = require('fs'), path = require('path');
 module.exports = ({ app, getWin, sysRef }) => {
   const out = process.env.RS_E2E_OUT || '/tmp/rs-e2e-cloud'; fs.mkdirSync(out, { recursive: true });
@@ -39,7 +39,7 @@ module.exports = ({ app, getWin, sysRef }) => {
         check(/connecting\.html/.test(url()) && W().isVisible(), 'slow server: the window is shown at once with the app\'s "Connecting…" page (not blank / frozen)');
         await shot('connecting');
         await sleep(5500);
-        check(/connecting\.html/.test(url()), 'still waiting at 8 s: the "Server jag raha hai…" (waking up) text is on that page (see screenshot)');
+        check(/connecting\.html/.test(url()), 'still waiting at 8 s: the "Server is waking up…" text is on that page (see screenshot)');
         await shot('waking-up');
         const w = await until(`!!document.querySelector('#loginForm')`, 40000);
         check(w >= 0, 'when the server answers, the login opens by itself');
@@ -61,7 +61,7 @@ module.exports = ({ app, getWin, sysRef }) => {
         // Offline mode → this PC's own files, unchanged
         await js(`document.querySelector('#loffline').click()`);
         const lok = await until(`!!(window.rs && !window.rs.web) && !document.querySelector('#login').classList.contains('hidden')`, 20000);
-        check(lok >= 0, 'Offline mode link opens the local login (sirf is PC pe)');
+        check(lok >= 0, 'Offline mode link opens the local login (this PC only)');
         check(await js(`!document.querySelector('#lserver').classList.contains('hidden') && /Online/.test(document.querySelector('#lserver').textContent)`), 'local login offers "☁ Online login" back');
         await shot('offline-mode-login');
         if (process.env.RS_LOCAL_PW) {
@@ -80,7 +80,7 @@ module.exports = ({ app, getWin, sysRef }) => {
       }
       check(t0 >= 0, `app opens straight on the online login (${t0} ms)`);
       const info = await js(`({ mode: document.querySelector('#lmode').innerText, alt: document.querySelector('#lalt').innerText, rem: document.querySelector('#lremw').classList.contains('hidden'), srv: document.querySelector('#lserver').classList.contains('hidden') })`);
-      check(/Online/.test(info.mode) && /Offline mode/.test(info.alt) && /Advanced/.test(info.alt), 'login shows Online + "Offline mode (sirf is PC pe)" + "Advanced: apna server"');
+      check(/Online/.test(info.mode) && /Offline mode/.test(info.alt) && !/Advanced/.test(info.alt), 'login shows Online + "Offline mode (this PC only)" and no own-server option');
       check(info.rem && info.srv, 'no "connect to server" step, no remember box (the app always stays logged in)');
       await shot('login');
       // wrong password

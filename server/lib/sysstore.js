@@ -15,6 +15,9 @@ const SYS_SCHEMA = [
   `CREATE INDEX IF NOT EXISTS ix_changes_co ON changes(company_id, seq)`,
   `CREATE TABLE IF NOT EXISTS otp_challenges (id_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, code_hash TEXT, created_at INTEGER, expires_at INTEGER, attempts INTEGER DEFAULT 0, sends INTEGER DEFAULT 1, last_sent INTEGER, remember INTEGER DEFAULT 0, ip TEXT, mail_ok INTEGER DEFAULT 1)`,
   `CREATE INDEX IF NOT EXISTS ix_otp_user ON otp_challenges(user_id, created_at)`,
+  // v2.3: "Forgot password?" — one row per reset code sent by email (only hashes are stored; 10 minutes, 5 tries, one use)
+  `CREATE TABLE IF NOT EXISTS pw_resets (id_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, code_hash TEXT, created_at INTEGER, expires_at INTEGER, attempts INTEGER DEFAULT 0, ip TEXT, mail_ok INTEGER DEFAULT 1)`,
+  `CREATE INDEX IF NOT EXISTS ix_pwr_user ON pw_resets(user_id, created_at)`,
 ];
 // v2.2 columns added to an existing users table (old rows keep working: no email = no OTP)
 const USER_COLS = [['email', 'TEXT'], ['otp', 'INTEGER DEFAULT 1'], ['email_verified', 'INTEGER DEFAULT 0'], ['backup_codes', 'TEXT']];
@@ -83,5 +86,14 @@ class SysStore {
   deleteChallenge(h) { return this.run('DELETE FROM otp_challenges WHERE id_hash=?', [h]); }
   async recentChallenges(uid, since) { const r = await this.get('SELECT COUNT(*) AS n, COALESCE(SUM(sends),0) AS s FROM otp_challenges WHERE user_id=? AND created_at>?', [uid, since]); return r ? Number(r.s) : 0; }
   purgeChallenges(before) { return this.run('DELETE FROM otp_challenges WHERE expires_at<?', [before]); }
+  // v2.3 password reset by email
+  addReset(r) { return this.run('INSERT INTO pw_resets (id_hash, user_id, code_hash, created_at, expires_at, attempts, ip, mail_ok) VALUES (?,?,?,?,?,?,?,?)', [r.id_hash, r.user_id, r.code_hash, r.now, r.expires_at, 0, r.ip || '', r.mail_ok ? 1 : 0]); }
+  reset(h) { return this.get('SELECT * FROM pw_resets WHERE id_hash=?', [h]); }
+  updateReset(h, f) { const k = Object.keys(f); return this.run(`UPDATE pw_resets SET ${k.map(x => x + '=?').join(',')} WHERE id_hash=?`, [...k.map(x => f[x]), h]); }
+  deleteReset(h) { return this.run('DELETE FROM pw_resets WHERE id_hash=?', [h]); }
+  deleteUserResets(uid) { return this.run('DELETE FROM pw_resets WHERE user_id=?', [uid]); }
+  invalidateUserResets(uid) { return this.run("UPDATE pw_resets SET expires_at=0, code_hash='' WHERE user_id=?", [uid]); }   // kept (for the hourly count) but unusable
+  async recentResets(uid, since) { const r = await this.get('SELECT COUNT(*) AS n FROM pw_resets WHERE user_id=? AND created_at>?', [uid, since]); return r ? Number(r.n) : 0; }
+  purgeResets(before) { return this.run('DELETE FROM pw_resets WHERE created_at<?', [before]); }
 }
 module.exports = { SysStore, SYS_SCHEMA };

@@ -213,14 +213,12 @@ function paintLoginExtras() {
   const mode = $('#lmode'); const alt = $('#lalt'); const rem = $('#lremw'); const sb = $('#lserver');
   let modeHtml = '', altHtml = '';
   if (ctx === 'local') {
-    modeHtml = '💻 <b>Offline mode</b> — sirf is PC pe · data on this PC only';
-    altHtml = '<a href="#" id="ladv">Advanced: apna server</a>';
+    modeHtml = '💻 <b>Offline mode</b> — data on this PC only';
   } else if (ctx === 'shell') {
-    const custom = window.rs.shell.custom;
-    modeHtml = '☁ <b>Online</b> — ek baar login, data har jagah · login once, data everywhere' + (custom ? `<small>Server: ${esc(window.rs.shell.server || location.host)}</small>` : '');
-    altHtml = '<a href="#" id="loffline">💻 Offline mode (sirf is PC pe)</a><span>·</span><a href="#" id="ladv">Advanced: apna server</a>' + (custom ? '<span>·</span><a href="#" id="ldefsrv">Default server pe wapas</a>' : '');
+    modeHtml = '☁ <b>Online</b> — login once, data everywhere';
+    altHtml = '<a href="#" id="loffline">💻 Offline mode (this PC only)</a>';
   } else if (ctx === 'android') {
-    modeHtml = '☁ <b>Online</b> — ek baar login, data har jagah · login once, data everywhere';
+    modeHtml = '☁ <b>Online</b> — login once, data everywhere';
   } else {
     modeHtml = '☁ Online · ' + esc(location.host);
     altHtml = '<a href="../" id="lapps">📲 Windows / Android app download</a>';
@@ -230,9 +228,7 @@ function paintLoginExtras() {
   rem.classList.toggle('hidden', ctx !== 'web');
   if (sb) { sb.classList.toggle('hidden', ctx !== 'local' || !info.canConnectServer); sb.onclick = () => api('app.useCloud').catch(fail); }
   const on = (id, fn) => { const el = $('#' + id); if (el) el.onclick = e => { e.preventDefault(); fn(); }; };
-  on('ladv', connectServerDialog);
   on('loffline', () => window.rs.shell.offline());
-  on('ldefsrv', () => window.rs.shell.resetServer());
   const wm = $('#lweb'); if (wm) wm.classList.add('hidden');
 }
 async function showLogin(info, keepTyped) {
@@ -250,8 +246,8 @@ async function showLogin(info, keepTyped) {
 }
 function loginErrorText(err) {
   const code = err && err.code;
-  if (code === 'bad_login') return 'Galat username ya password. (Wrong username or password.)';
-  if (code === 'rate_limited') return 'Bahut baar galat password — thoda ruko. ' + err.message;
+  if (code === 'bad_login') return 'Wrong username or password.';
+  if (code === 'rate_limited') return 'Too many wrong attempts — please wait. ' + err.message;
   return (err && err.message) || String(err);
 }
 $('#lpeye').onclick = () => { const p = $('#lp'); p.type = p.type === 'password' ? 'text' : 'password'; p.focus(); };
@@ -259,7 +255,7 @@ $('#loginForm').addEventListener('submit', async e => {
   e.preventDefault(); if ($('#lbtn').disabled) return;
   $('#lerr').textContent = ''; APP.loginTouched = true;
   const u = $('#lu').value.trim(), p = $('#lp').value;
-  if (!u || !p) { $('#lerr').textContent = 'Username aur password dono likho. (Enter username and password.)'; return; }
+  if (!u || !p) { $('#lerr').textContent = 'Enter both username and password.'; return; }
   const ctx = loginCtx(); const remember = ctx === 'shell' || ctx === 'android' || (ctx === 'web' && $('#lrem').checked);
   const btn = $('#lbtn'); const label = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Logging in…';
   try {
@@ -275,12 +271,6 @@ $('#loginForm').addEventListener('submit', async e => {
   } catch (err) { $('#lerr').textContent = loginErrorText(err); }
   finally { btn.disabled = false; btn.innerHTML = label; }
 });
-async function connectServerDialog() {
-  const shell = window.rs && window.rs.shell;
-  const v = await promptBox('Advanced: apna server (your own server)', [{ k: 'url', label: 'Server address', w: 2, help: 'Sirf tab jab aapka apna R&S Sons server ho · e.g. http://192.168.1.10:8080 or https://accounts.example.com' }], { url: (shell ? (shell.custom ? shell.server : '') : APP.info.serverUrl) || '' });
-  if (!v || !v.url) return;
-  try { if (shell) await shell.setServer(v.url.trim()); else await api('app.setServer', v.url.trim()); } catch (e) { fail(e); }
-}
 // Android back button (and any "go back" request from the app shell): true = handled here, false = let the app close
 window.rsBack = function () {
   const dv = document.getElementById('docview'); if (dv && !dv.classList.contains('hidden')) { const c = dv.querySelector('.dv-c'); if (c) c.click(); return true; }
@@ -321,7 +311,7 @@ async function showCompanies() {
   if (droid && droid.lockState) {
     let st = {}; try { st = JSON.parse(droid.lockState() || '{}'); } catch (_) {}
     const tb = $('.toolbar', card); const b = document.createElement('button'); b.className = 'btn'; b.id = 'clock';
-    const paintLock = on => { b.textContent = on ? '🔒 App lock: ON' : '🔓 App lock: OFF'; b.title = 'Fingerprint / phone PIN se app kholo'; };
+    const paintLock = on => { b.textContent = on ? '🔒 App lock: ON' : '🔓 App lock: OFF'; b.title = 'Open the app with fingerprint / phone PIN'; };
     paintLock(!!st.on); b.onclick = () => droid.setLock(!/ON/.test(b.textContent));
     window.rsLockChanged = on => paintLock(!!on);
     tb.insertBefore(b, $('#clogout', card));
@@ -404,7 +394,7 @@ async function quickSearch() {
       for (const l of ledgers) rows.push(`<div class="qs-row" data-k="l" data-id="${l.id}"><span class="qs-t">👤 ${esc(l.name)}</span><small>${esc(l.group_name || '')}${l.gstin ? ' · ' + esc(l.gstin) : ''}</small></div>`);
       for (const i of items) rows.push(`<div class="qs-row" data-k="i" data-id="${i.id}"><span class="qs-t">📦 ${esc(i.name)}</span><small>₹${inr(i.sale_rate || 0)}${i.hsn ? ' · HSN ' + esc(i.hsn) : ''}</small></div>`);
       for (const v of vouchers) rows.push(`<div class="qs-row" data-k="v" data-id="${v.id}"><span class="qs-t">🧾 ${esc(vt(v.vtype))} ${esc(v.number || '')}</span><small>${U.fmtDate(v.date)} · ${esc(v.party_name || v.narration || '')} · ₹${inr(v.total)}</small></div>`);
-      out.innerHTML = rows.join('') + (busy ? '<div class="qs-hint"><span class="spin"></span> Searching invoices…</div>' : rows.length ? '' : '<div class="qs-hint">Kuch nahi mila · nothing found</div>');
+      out.innerHTML = rows.join('') + (busy ? '<div class="qs-hint"><span class="spin"></span> Searching invoices…</div>' : rows.length ? '' : '<div class="qs-hint">Nothing found</div>');
       $$('.qs-row', out).forEach(d => d.onclick = () => close({ k: d.dataset.k, id: +d.dataset.id }));
     };
     inp.oninput = () => {
@@ -448,9 +438,9 @@ async function startApp() {
   let info = null;
   const online = !!(window.rs && window.rs.web);
   if (online) {
-    $('#login').classList.remove('hidden'); paintLoginExtras(); setConn('wait', 'Connecting… · जुड़ रहा है');
-    const slow = setTimeout(() => { if ($('#lconn').dataset.state === 'wait') setConn('wait', 'Server jag raha hai… pehli baar 10-30 sec lag sakte hain · Server is waking up'); }, 6000);
-    try { info = await api('app.info'); } catch (e) { clearTimeout(slow); setConn('fail', e.message); $('#lretry').onclick = () => { setConn('wait', 'Connecting… · जुड़ रहा है'); startApp(); }; return; }
+    $('#login').classList.remove('hidden'); paintLoginExtras(); setConn('wait', 'Connecting…');
+    const slow = setTimeout(() => { if ($('#lconn').dataset.state === 'wait') setConn('wait', 'Server is waking up… the first time can take 10–30 seconds'); }, 6000);
+    try { info = await api('app.info'); } catch (e) { clearTimeout(slow); setConn('fail', e.message); $('#lretry').onclick = () => { setConn('wait', 'Connecting…'); startApp(); }; return; }
     clearTimeout(slow); setConn(null);
   }
   try {

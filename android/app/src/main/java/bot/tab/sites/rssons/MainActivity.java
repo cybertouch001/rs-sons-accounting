@@ -84,7 +84,7 @@ public class MainActivity extends Activity {
     private View lockView;
     private boolean unlocked = false, authing = false;
     private long pausedAt = 0;
-    private final Runnable slowHint = () -> { if (!loaded && !failed) setStatus("Server jag raha hai…", "Pehli baar 10-30 sec lag sakte hain · Server is waking up, please wait"); };
+    private final Runnable slowHint = () -> { if (!loaded && !failed) setStatus("Server is waking up…", "The first time can take 10–30 seconds, please wait"); };
     private final Runnable showRetryLate = () -> { if (!loaded && !failed) buttons.setVisibility(View.VISIBLE); };
 
     @Override
@@ -120,7 +120,7 @@ public class MainActivity extends Activity {
         title.setPadding(0, dp(14), 0, dp(4));
         overlay.addView(title);
         TextView tag = new TextView(this);
-        tag.setText("Ek baar login, data har jagah · Login once, data everywhere");
+        tag.setText("Login once, data everywhere");
         tag.setTextColor(Color.parseColor("#a9bcd6")); tag.setTextSize(13); tag.setGravity(Gravity.CENTER);
         overlay.addView(tag);
         spinner = new ProgressBar(this);
@@ -140,7 +140,7 @@ public class MainActivity extends Activity {
         buttons.addView(retry);
         buttons.setVisibility(View.GONE);
         overlay.addView(buttons);
-        setStatus("Connecting…", "जुड़ रहा है");
+        setStatus("Connecting…", "Opening the online login");
         return overlay;
     }
 
@@ -195,7 +195,7 @@ public class MainActivity extends Activity {
                 Intent i = new Intent(Intent.ACTION_GET_CONTENT);
                 i.addCategory(Intent.CATEGORY_OPENABLE);
                 i.setType("*/*");
-                try { startActivityForResult(Intent.createChooser(i, "File chuno · Choose file"), 41); }
+                try { startActivityForResult(Intent.createChooser(i, "Choose file"), 41); }
                 catch (ActivityNotFoundException e) { fileCb = null; return false; }
                 return true;
             }
@@ -215,13 +215,13 @@ public class MainActivity extends Activity {
             Intent i = new Intent(Intent.ACTION_VIEW, u);
             if ("mailto".equals(u.getScheme())) i = new Intent(Intent.ACTION_SENDTO, u);
             startActivity(i);
-        } catch (Exception e) { Toast.makeText(this, "Is link ko kholne wala app nahi mila", Toast.LENGTH_SHORT).show(); }
+        } catch (Exception e) { Toast.makeText(this, "No app found to open this link", Toast.LENGTH_SHORT).show(); }
     }
 
     private void load() {
         loaded = false; failed = false;
         overlay.setVisibility(View.VISIBLE); spinner.setVisibility(View.VISIBLE); buttons.setVisibility(View.GONE);
-        setStatus("Connecting…", "जुड़ रहा है");
+        setStatus("Connecting…", "Opening the online login");
         ui.removeCallbacks(slowHint); ui.removeCallbacks(showRetryLate);
         ui.postDelayed(slowHint, 6000); ui.postDelayed(showRetryLate, 20000);
         if (!online()) { showOffline(-2, "no network"); return; }
@@ -232,8 +232,8 @@ public class MainActivity extends Activity {
         failed = true; loaded = false;
         ui.removeCallbacks(slowHint); ui.removeCallbacks(showRetryLate);
         overlay.setVisibility(View.VISIBLE); spinner.setVisibility(View.GONE); buttons.setVisibility(View.VISIBLE);
-        if (!online()) setStatus("📴 Internet nahi hai", "No internet connection. Internet chalu karo — app apne aap connect ho jayegi.\nAapka data server pe safe hai.");
-        else setStatus("⚠ Server tak nahi pahunch paaye", "Could not reach the server (" + desc + "). Thodi der baad Retry karo.\nAapka data server pe safe hai.");
+        if (!online()) setStatus("📴 No internet connection", "Turn on the internet — the app reconnects by itself.\nYour data is safe on the server.");
+        else setStatus("⚠ Could not reach the server", "Could not reach the server (" + desc + "). Please press Retry in a little while.\nYour data is safe on the server.");
         web.loadUrl("about:blank");
     }
 
@@ -264,7 +264,7 @@ public class MainActivity extends Activity {
             long now = System.currentTimeMillis();
             if (now - lastBack < 2000) { finish(); return; }
             lastBack = now;
-            Toast.makeText(this, "Band karne ke liye dobara Back dabao", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Press Back again to close", Toast.LENGTH_SHORT).show();
         });
     }
 
@@ -295,7 +295,7 @@ public class MainActivity extends Activity {
         l.addView(logo, new LinearLayout.LayoutParams(dp(80), dp(80)));
         TextView t = new TextView(this); t.setText("🔒 App locked"); t.setTextColor(Color.WHITE); t.setTextSize(20); t.setGravity(Gravity.CENTER); t.setPadding(0, dp(16), 0, dp(6));
         l.addView(t);
-        TextView s = new TextView(this); s.setText("Fingerprint / phone PIN se kholo"); s.setTextColor(Color.parseColor("#c7d4e6")); s.setGravity(Gravity.CENTER);
+        TextView s = new TextView(this); s.setText("Open with fingerprint / phone PIN"); s.setTextColor(Color.parseColor("#c7d4e6")); s.setGravity(Gravity.CENTER);
         l.addView(s);
         Button b = new Button(this); b.setText("Unlock"); b.setOnClickListener(v -> askUnlock());
         LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT); bp.topMargin = dp(22);
@@ -305,7 +305,7 @@ public class MainActivity extends Activity {
     }
     private boolean lockOn() { return prefs != null && prefs.getBoolean("lock", false); }
     private boolean deviceSecure() { KeyguardManager km = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE); return km != null && km.isDeviceSecure(); }
-    private void askUnlock() { authenticate("R&S Sons Accounting", "Unlock karo · fingerprint / PIN", ok -> { if (ok) { unlocked = true; lockView.setVisibility(View.GONE); } }); }
+    private void askUnlock() { authenticate("R&S Sons Accounting", "Unlock with fingerprint / PIN", ok -> { if (ok) { unlocked = true; lockView.setVisibility(View.GONE); } }); }
     interface AuthDone { void done(boolean ok); }
     private AuthDone pendingAuth;
     @SuppressWarnings("deprecation")
@@ -369,36 +369,22 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface public String saveFile(String name, String mime, String b64) {
-            JSONObject out = new JSONObject();
             try {
                 if (!trusted()) throw new Exception("not allowed");
-                String safe = name == null ? "file" : name.replaceAll("[\\\\/:*?\"<>|]+", "-").trim();
-                if (safe.isEmpty()) safe = "file";
                 byte[] bytes = Base64.decode(b64 == null ? "" : b64, Base64.DEFAULT);
-                Uri shareUri; String where;
-                if (Build.VERSION.SDK_INT >= 29) {
-                    ContentValues cv = new ContentValues();
-                    cv.put(MediaStore.Downloads.DISPLAY_NAME, safe);
-                    cv.put(MediaStore.Downloads.MIME_TYPE, mime);
-                    cv.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/RS Sons Accounting");
-                    Uri u = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
-                    if (u == null) throw new Exception("Downloads folder not available");
-                    try (OutputStream os = getContentResolver().openOutputStream(u)) { os.write(bytes); }
-                    shareUri = u; where = "Downloads/RS Sons Accounting";
-                } else {
-                    File dir = new File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "RS Sons Accounting");
-                    if (!dir.exists() && !dir.mkdirs()) throw new Exception("cannot create folder");
-                    File f = new File(dir, safe);
-                    try (FileOutputStream os = new FileOutputStream(f)) { os.write(bytes); }
-                    shareUri = ExportProvider.uriFor(f); where = "Android/data/" + getPackageName() + "/files/Download/RS Sons Accounting";
-                }
-                final Uri su = shareUri; final String fn = safe, w = where, mt = mime;
-                ui.post(() -> fileSaved(su, fn, mt, w));
-                out.put("file", safe); out.put("where", where);
+                return saveToDownloads(name, mime, bytes).toString();
             } catch (Exception e) {
+                JSONObject out = new JSONObject();
                 try { out.put("error", e.getMessage() == null ? e.toString() : e.getMessage()); } catch (Exception ignored) { }
+                return out.toString();
             }
-            return out.toString();
+        }
+
+        // v2.3: invoice / report → a real PDF saved in Downloads (Open / Share from the "File saved" box)
+        @JavascriptInterface public void savePdf(String html, String name) {
+            if (!trusted()) return;
+            final String h = html == null ? "" : html, n = name == null || name.isEmpty() ? "Document" : name;
+            ui.post(() -> makePdf(h, n, "", true));
         }
 
         @JavascriptInterface public String lockState() {
@@ -408,12 +394,12 @@ public class MainActivity extends Activity {
             if (!trusted()) return;
             ui.post(() -> {
                 if (on && !deviceSecure()) {
-                    new AlertDialog.Builder(MainActivity.this).setTitle("Pehle phone lock lagao")
-                        .setMessage("App lock ke liye phone me screen lock (PIN / pattern / fingerprint) hona chahiye. Settings → Security → Screen lock.")
+                    new AlertDialog.Builder(MainActivity.this).setTitle("Set a phone screen lock first")
+                        .setMessage("App lock needs a screen lock on the phone (PIN / pattern / fingerprint). Settings → Security → Screen lock.")
                         .setPositiveButton("OK", null).show();
                     return;
                 }
-                authenticate(on ? "App lock ON karo" : "App lock OFF karo", "Fingerprint / phone PIN", ok -> {
+                authenticate(on ? "Turn app lock ON" : "Turn app lock OFF", "Fingerprint / phone PIN", ok -> {
                     if (ok) { prefs.edit().putBoolean("lock", on).apply(); unlocked = true; Toast.makeText(MainActivity.this, on ? "App lock ON 🔒" : "App lock OFF", Toast.LENGTH_SHORT).show(); }
                     jsLockState();
                 });
@@ -432,22 +418,50 @@ public class MainActivity extends Activity {
         }
     }
 
+    // the Downloads/RS Sons Accounting folder (MediaStore on Android 10+, the app's own Download folder before that)
+    private JSONObject saveToDownloads(String name, String mime, byte[] bytes) throws Exception {
+        JSONObject out = new JSONObject();
+        String safe = name == null ? "file" : name.replaceAll("[\\\\/:*?\"<>|]+", "-").trim();
+        if (safe.isEmpty()) safe = "file";
+        Uri shareUri; String where;
+        if (Build.VERSION.SDK_INT >= 29) {
+            ContentValues cv = new ContentValues();
+            cv.put(MediaStore.Downloads.DISPLAY_NAME, safe);
+            cv.put(MediaStore.Downloads.MIME_TYPE, mime);
+            cv.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/RS Sons Accounting");
+            Uri u = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+            if (u == null) throw new Exception("Downloads folder not available");
+            try (OutputStream os = getContentResolver().openOutputStream(u)) { os.write(bytes); }
+            shareUri = u; where = "Downloads/RS Sons Accounting";
+        } else {
+            File dir = new File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "RS Sons Accounting");
+            if (!dir.exists() && !dir.mkdirs()) throw new Exception("cannot create folder");
+            File f = new File(dir, safe);
+            try (FileOutputStream os = new FileOutputStream(f)) { os.write(bytes); }
+            shareUri = ExportProvider.uriFor(f); where = "Android/data/" + getPackageName() + "/files/Download/RS Sons Accounting";
+        }
+        final Uri su = shareUri; final String fn = safe, w = where, mt = mime;
+        ui.post(() -> fileSaved(su, fn, mt, w));
+        out.put("file", safe); out.put("where", where);
+        return out;
+    }
+
     private void fileSaved(Uri uri, String name, String mime, String where) {
         new AlertDialog.Builder(this)
-            .setTitle("File save ho gayi ✓")
+            .setTitle("File saved ✓")
             .setMessage(name + "\n\n" + where)
             .setPositiveButton("Share", (d, w) -> {
                 Intent s = new Intent(Intent.ACTION_SEND);
                 s.setType(mime == null ? "application/octet-stream" : mime);
                 s.putExtra(Intent.EXTRA_STREAM, uri);
                 s.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                try { startActivity(Intent.createChooser(s, "Share " + name)); } catch (Exception e) { Toast.makeText(this, "Share nahi ho paya", Toast.LENGTH_SHORT).show(); }
+                try { startActivity(Intent.createChooser(s, "Share " + name)); } catch (Exception e) { Toast.makeText(this, "Could not share", Toast.LENGTH_SHORT).show(); }
             })
             .setNeutralButton("Open", (d, w) -> {
                 Intent v = new Intent(Intent.ACTION_VIEW);
                 v.setDataAndType(uri, mime == null ? "application/octet-stream" : mime);
                 v.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                try { startActivity(v); } catch (Exception e) { Toast.makeText(this, "Is file ko kholne wala app nahi mila (Excel / Sheets install karo)", Toast.LENGTH_LONG).show(); }
+                try { startActivity(v); } catch (Exception e) { Toast.makeText(this, "No app found to open this file (install a PDF / Excel / Sheets app)", Toast.LENGTH_LONG).show(); }
             })
             .setNegativeButton("OK", null)
             .show();
@@ -456,8 +470,9 @@ public class MainActivity extends Activity {
 
     // invoice / report → a real PDF file on the phone → share sheet (WhatsApp, mail, Drive…)
     private WebView pdfView;
-    private void makePdf(String html, String name, String text) {
-        Toast.makeText(this, "PDF ban raha hai…", Toast.LENGTH_SHORT).show();
+    private void makePdf(String html, String name, String text) { makePdf(html, name, text, false); }
+    private void makePdf(String html, String name, String text, boolean save) {
+        Toast.makeText(this, "Making the PDF…", Toast.LENGTH_SHORT).show();
         final int w = dp(794) ; final int pageH = Math.round(w * 842f / 595f);
         final FrameLayout root = (FrameLayout) overlay.getParent();
         if (pdfView != null) { root.removeView(pdfView); pdfView.destroy(); }
@@ -468,11 +483,11 @@ public class MainActivity extends Activity {
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(w, pageH); lp.leftMargin = -w * 2;   // laid out, but off screen
         root.addView(pdfView, 0, lp);
         pdfView.setWebViewClient(new WebViewClient() {
-            @Override public void onPageFinished(WebView v, String url) { ui.postDelayed(() -> renderPdf(v, w, pageH, name, text), 700); }
+            @Override public void onPageFinished(WebView v, String url) { ui.postDelayed(() -> renderPdf(v, w, pageH, name, text, save), 700); }
         });
         pdfView.loadDataWithBaseURL(SERVER + "/app/", html, "text/html", "utf-8", null);
     }
-    private void renderPdf(WebView v, int w, int pageH, String name, String text) {
+    private void renderPdf(WebView v, int w, int pageH, String name, String text, boolean save) {
         try {
             int total = Math.max(pageH, Math.round(v.getContentHeight() * getResources().getDisplayMetrics().density));
             int pages = Math.min(40, (int) Math.ceil(total / (double) pageH));
@@ -485,15 +500,16 @@ public class MainActivity extends Activity {
                     dir.mkdirs(); File f = new File(dir, safe);
                     try (FileOutputStream os = new FileOutputStream(f)) { doc.writeTo(os); }
                     doc.close();
+                    if (save) { byte[] b = new byte[(int) f.length()]; try (java.io.FileInputStream is = new java.io.FileInputStream(f)) { int o = 0, r; while (o < b.length && (r = is.read(b, o, b.length - o)) > 0) o += r; } saveToDownloads(safe, "application/pdf", b); return; }
                     Intent s = new Intent(Intent.ACTION_SEND);
                     s.setType("application/pdf");
                     s.putExtra(Intent.EXTRA_STREAM, ExportProvider.uriFor(f));
                     if (!text.isEmpty()) s.putExtra(Intent.EXTRA_TEXT, text);
                     s.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                    startActivity(Intent.createChooser(s, "Share PDF · WhatsApp"));
-                } catch (Exception e) { Toast.makeText(this, "PDF nahi bana: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
+                    startActivity(Intent.createChooser(s, "Share PDF"));
+                } catch (Exception e) { Toast.makeText(this, "Could not make the PDF: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
             });
-        } catch (Exception e) { Toast.makeText(this, "PDF nahi bana: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
+        } catch (Exception e) { Toast.makeText(this, "Could not make the PDF: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
     }
     private void drawPage(WebView v, PdfDocument doc, int i, int pages, int pageH, float scale, Runnable done) {
         if (i >= pages) { done.run(); return; }

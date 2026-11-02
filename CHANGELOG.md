@@ -1,16 +1,33 @@
 # Changelog
 
+## 2.3.0 (2 Nov 2026): English only, Forgot password, PDF for viewers
+
+**English only**
+- Every screen, message, toast, notification, dialog, menu, report and email (login OTP, reset code) is English. The live-update notification reads e.g. "Ramesh saved Sales Invoice #INV/2".
+
+**Own server option removed**
+- The Windows and Android apps always use the hosted server (or Offline mode on the PC). The "Advanced" own-server dialog and the Ctrl+Shift+L server shortcut are gone, in the app and in the desktop bridge.
+
+**Forgot password?**
+- Login screen › Forgot password? › username › a 6-digit reset code goes to that user's email › new password twice. Works for every role, admin included.
+- The code is valid 10 minutes and once only; 5 wrong tries end it; resend after 60 s; at most 4 codes per user and 12 per network per hour. Only hashes are stored. An unknown username gets the same neutral answer.
+- A backup code (from Email settings) can be used instead of the email code. After a reset every session of that user is logged out and a "password changed" email is sent.
+- Mail goes through the same Gmail App Password / SMTP settings as the login OTP (Admin › Email settings). Without them, the screen says so and the admin resets the password.
+
+**Viewer PDF options**
+- Invoices, vouchers and reports open in a built-in PDF viewer with Download PDF, Print and Share (Share PDF on Android; Save / Share on Windows; WhatsApp / email links in a browser). Viewers still cannot change anything: the server answers 403 to every write.
+
 ## 2.2.0 (2 Nov 2026): view-only users, live updates, email OTP login
 
 **Viewer = strictly view only**
 - A user with the Viewer role can only read. Every save / edit / delete / post / import button is disabled and greyed out on every screen and dialog (clicks and shortcuts like Ctrl+S, Alt+C, F4–F9 are stopped before the screen sees them); saved vouchers and masters open read-only.
 - The server refuses every write from a viewer with HTTP 403 (it already checked roles; v2.2 adds tests for each kind of write).
 - The viewer's screen shows only reading screens: no backup / restore, settings, users, company create / delete, data entry, bank import or admin menus. Utilities shows only Change Password, Help and About.
-- A PC or phone where a viewer logs in hides the "Offline mode (sirf is PC pe)", "Advanced: apna server" and online/offline storage choices on the login screen; the Windows app also refuses offline mode and server changes there (Ctrl+Shift+L too) until a non-viewer logs in on that device.
+- A PC or phone where a viewer logs in hides the Offline mode, own-server and online/offline storage choices on the login screen; the Windows app also refuses offline mode and server changes there (Ctrl+Shift+L too) until a non-viewer logs in on that device.
 
 **Live updates between users**
 - Every save writes one small change row on the server. While a company is open, the app asks "anything new since #N?" every 3 s (15 s in the background), on Windows, Android and the browser.
-- Another user's save shows a notification ("Ramesh ne Sales Invoice #INV/12 save kiya") and refreshes the open dashboard / report / list at once. A screen with unsaved typing is never reloaded under you: a "data changed — Refresh" bar appears instead. 🔔 in the top bar lists recent changes.
+- Another user's save shows a notification ("Ramesh saved Sales Invoice #INV/12") and refreshes the open dashboard / report / list at once. A screen with unsaved typing is never reloaded under you: a "data changed — Refresh" bar appears instead. 🔔 in the top bar lists recent changes.
 - Android: a phone notification while the app is in the background (asks for the notification permission on Android 13+). Windows: a desktop notification when the window is not in front.
 
 **Email OTP login**
@@ -28,15 +45,15 @@
 
 **Apps**
 - The Windows app opens straight on the online login for the hosted server. It stays logged in like a phone app, remembers the last username (never the password), and has a Logout.
-  - "Offline mode (sirf is PC pe)" on the login screen opens the old local books on this PC. v1.1 and v2.0 local data is untouched.
-  - "Advanced: apna server" points the app at a self-hosted server.
-  - Ctrl+Shift+L switches to offline mode.
+  - "Offline mode (this PC only)" on the login screen opens the old local books on this PC. v1.1 and v2.0 local data is untouched.
+  - An advanced option pointed the app at a self-hosted server (removed in 2.3).
+  - Ctrl+Shift+L switched the server (removed in 2.3).
 - New Android app (`bot.tab.sites.rssons`, Android 6+):
   - Same login and same data as Windows and the web.
   - Stays logged in; the back button moves through screens.
   - PDF / Excel go to Downloads; invoice PDFs share to WhatsApp and others.
   - Clear no-internet message with auto-retry; optional app lock (fingerprint or phone PIN).
-- Connection states in Hindi and English, with Retry: "Connecting…", "Server jag raha hai…" (server waking up), "Internet nahi hai". Login errors are bilingual too.
+- Connection states with Retry: "Connecting…", "Server is waking up…", "No internet".
 
 **Speed**
 - Opening a company: about 3.5 s → 2.3 s (15 → 6 server calls).

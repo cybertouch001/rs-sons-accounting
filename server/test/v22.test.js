@@ -25,7 +25,7 @@ function fakeSmtp() {
   return new Promise(r => srv.listen(0, '127.0.0.1', () => r({ srv, port: srv.address().port, inbox, st })));
 }
 function textOf(raw) { const parts = raw.split(/\r\n--rs/); for (const p of parts) if (/text\/plain/.test(p)) { const b = p.split('\r\n\r\n')[1] || ''; return Buffer.from(b.replace(/\s+/g, ''), 'base64').toString('utf8'); } return ''; }
-function codeIn(raw) { const m = textOf(raw).match(/OTP hai: (\d{6})/); return m && m[1]; }
+function codeIn(raw) { const m = textOf(raw).match(/(?:login|reset) code is:? (\d{6})/); return m && m[1]; }
 function startServer(dir) {
   const port = 25000 + Math.floor(Math.random() * 3000);
   const p = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], { env: { ...process.env, PORT: String(port), DATA_DIR: dir, ADMIN_PASSWORD: 'Start#Pass2026' }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -81,7 +81,7 @@ async function rejects(p, code, status) { try { await p; } catch (e) { return (!
     const co2 = await admin.call('company.create', { name: 'Other Co', state_code: '09', books_begin: '2026-04-01' }); await admin.call('company.open', co2.id); await admin.call('c', 'saveLedger', { name: 'Elsewhere', group_id: grp.id });
     ok((await s1.call('sync.poll', got.seq)).items.length === 0, 'a save in another company is not shown');
     await admin.call('company.open', co.id); await admin.call('c', 'deleteVoucher', vch.id);
-    const del = await s1.call('sync.poll', got.seq); ok(del.items.length === 1 && del.items[0].kind === 'delete' && del.items[0].label.includes(vch.number), 'delete shows as "delete kiya" with the number');
+    const del = await s1.call('sync.poll', got.seq); ok(del.items.length === 1 && del.items[0].kind === 'delete' && del.items[0].label.includes(vch.number), 'delete shows as "deleted" with the number');
     console.log('    (poll answered in ' + ms + ' ms)');
 
     console.log('\nEmail OTP');
@@ -123,7 +123,7 @@ async function rejects(p, code, status) { try { await p; } catch (e) { return (!
     // backup codes
     const codes = await r5.call('auth.backupCodes', PW); ok(codes.length === 8 && codes.every(c => /^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(c)), '8 backup codes made');
     mail.st.rejectAuth = true;
-    const r6 = client(base); const l6 = await r6.call('auth.login', 'ramesh', PW); ok(l6.otp && l6.mailFailed && /nahi gaya/.test(l6.error) && l6.hasBackup, 'mail server down → OTP step says the mail failed');
+    const r6 = client(base); const l6 = await r6.call('auth.login', 'ramesh', PW); ok(l6.otp && l6.mailFailed && /could not send/i.test(l6.error) && l6.hasBackup, 'mail server down → OTP step says the mail failed');
     ok((await r6.call('auth.verifyOtp', l6.challenge, codes[0].toLowerCase())).username === 'ramesh', 'a backup code logs in when the email does not arrive');
     const r7 = client(base); const l7 = await r7.call('auth.login', 'ramesh', PW); ok(await rejects(r7.call('auth.verifyOtp', l7.challenge, codes[0]), 'otp_wrong'), 'a backup code works only once');
     const lg = await admin.call('admin.log'); ok(lg.some(x => x.action === 'Login OTP email FAILED'), 'failed OTP mails are in the admin log');

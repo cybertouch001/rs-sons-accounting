@@ -160,6 +160,10 @@ html[data-theme=dark] #modal .actions{background:linear-gradient(transparent,var
 #docview{position:fixed;inset:0;z-index:60;background:rgba(10,20,35,.75);display:flex;flex-direction:column;padding:12px}
 #docview .dv-bar{display:flex;align-items:center;gap:8px;background:#fff;border-radius:8px 8px 0 0;padding:8px 10px}
 #docview .dv-f{flex:1;border:0;background:#fff;border-radius:0 0 8px 8px;width:100%}
+#login .lforgot-w{text-align:right;margin-top:8px;font-size:12.5px}#login .lforgot-w a{color:#1d5fa8}
+#docview .dv-m,#docview .dv-sh{background:#eef6f5;color:#123;border-top:1px solid #d7e6e4;padding:7px 12px;font-size:12.5px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;word-break:break-all}
+#docview .dv-m.hidden,#docview .dv-sh.hidden{display:none}
+#docview .dv-sh span{flex:1;min-width:200px;color:#456}
 #tmenu{display:none}
 /* phones & small tablets (browser login from anywhere) */
 

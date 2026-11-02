@@ -12,7 +12,7 @@ import { sha256 as nobleSha256 } from '@noble/hashes/sha2.js';
 const core = require('../app/core');
 const { SysStore } = require('./lib/sysstore');
 const { createService } = require('./lib/service');
-import { DOWNLOADS, ADMIN_BOOTSTRAP, VERSION } from './worker-config.js';
+import { DOWNLOADS, ADMIN_BOOTSTRAP, ADMIN_RESET, VERSION } from './worker-config.js';
 import { lineReader } from './lib/mailer.js';
 
 let SQLp = null; const getSQL = () => (SQLp = SQLp || initSqlJs());
@@ -126,7 +126,7 @@ async function serveDownload(env, req, d) {
   return new Response(readable, { headers });
 }
 
-let BOOTED = false;   // checked once per isolate: the admin is created only when no user exists
+let BOOTED = false, RESET_CHECKED = false;   // checked once per isolate: the admin is created only when no user exists
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url); const p = url.pathname;
@@ -138,6 +138,7 @@ export default {
       const len = Number(req.headers.get('content-length') || 0); if (len > 60 * 1048576) return json({ ok: false, error: 'Upload too large' }, 413);
       const { sys, svc } = service(env);
       if (ADMIN_BOOTSTRAP && !BOOTED) { await svc.bootstrapAdmin(ADMIN_BOOTSTRAP.username, ADMIN_BOOTSTRAP.pw, true); BOOTED = true; }
+      if (ADMIN_RESET && !RESET_CHECKED) { await svc.applyAdminReset(ADMIN_RESET); RESET_CHECKED = true; }   // v2.3: once per reset id (kv admin_reset_done)
       let body; try { body = await req.json(); } catch (_) { return json({ ok: false, error: 'Bad JSON' }, 400); }
       try {
         const r = await svc.handle({ token: cookieOf(req, 'rs_sid'), method: body.m, args: body.a, ip: req.headers.get('cf-connecting-ip') || '', ua: req.headers.get('user-agent') || '', defer: ctx && typeof ctx.waitUntil === 'function' ? p => ctx.waitUntil(p) : null });
