@@ -13,6 +13,7 @@ const core = require('../app/core');
 const { SysStore } = require('./lib/sysstore');
 const { createService } = require('./lib/service');
 import { DOWNLOADS, ADMIN_BOOTSTRAP, VERSION } from './worker-config.js';
+import { lineReader } from './lib/mailer.js';
 
 let SQLp = null; const getSQL = () => (SQLp = SQLp || initSqlJs());
 const hex = b => [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join('');
@@ -86,11 +87,29 @@ class R2CompanyStore {
   async listBackups(id) { const l = await this.b.list({ prefix: `backups/${id}/` }); return l.objects.map(o => ({ file: o.key.split('/').pop(), size: o.size })).sort((a, b) => b.file.localeCompare(a.file)); }
 }
 
+// v2.2: outgoing TCP for the OTP mailer (SMTP over TLS: 465, or 587 + STARTTLS)
+function cfSock(s) {
+  const w = s.writable.getWriter(); const r = s.readable.getReader(); const te = new TextEncoder();
+  return { readLine: lineReader(async () => { const x = await r.read(); return x.done ? null : x.value; }), write: (str) => w.write(te.encode(str)),
+    startTls: async () => { w.releaseLock(); r.releaseLock(); return cfSock(s.startTls()); }, close: () => { try { s.close(); } catch (_) {} } };
+}
+async function netOpen(host, port, mode) { const { connect } = await import('cloudflare:sockets'); const s = connect({ hostname: host, port: Number(port) }, { secureTransport: mode === 'ssl' ? 'on' : mode === 'none' ? 'off' : 'starttls', allowHalfOpen: false }); if (s.opened) await s.opened; return cfSock(s); }
+
+let PROBE = null;
+async function mailProbe() {
+  if (PROBE && Date.now() - PROBE.t < 600000) return PROBE.r;
+  const t0 = Date.now(); let r;
+  try { const s = await netOpen('smtp.gmail.com', 465, 'ssl'); const g = await Promise.race([s.readLine(), new Promise((_, j) => setTimeout(() => j(new Error('no greeting in 10 s')), 10000))]); try { await s.write('QUIT\r\n'); } catch (_) {} s.close(); r = { ok: /^220/.test(g || ''), smtp: 'smtp.gmail.com:465', greeting: String(g || '').slice(0, 24), ms: Date.now() - t0 }; }
+  catch (e) { r = { ok: false, smtp: 'smtp.gmail.com:465', error: String(e && e.message || e).slice(0, 200), ms: Date.now() - t0 }; }
+  PROBE = { t: Date.now(), r }; return r;
+}
 let SVC = null;
 function service(env) {
   if (SVC) return SVC;
   const sys = new SysStore(new D1Driver(env.DB)); const store = new R2CompanyStore(env.FILES);
-  SVC = { sys, svc: createService({ sys, store, crypto: CR, XLSX, QRCode, version: VERSION, dataLabel: 'Hosted server (rs-sons-accounting.sites.tab.bot)' }) };
+  // v2.2: before the first schema change, a full copy of the system tables is written to R2 (backups/_system/)
+  sys.onMigrate = async (dump) => { await env.FILES.put(`backups/_system/pre-${VERSION}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`, new TextEncoder().encode(JSON.stringify(dump))); };
+  SVC = { sys, svc: createService({ sys, store, crypto: CR, XLSX, QRCode, version: VERSION, netOpen, dataLabel: 'Hosted server (rs-sons-accounting.sites.tab.bot)' }) };
   return SVC;
 }
 const SEC = { 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'same-origin', 'Strict-Transport-Security': 'max-age=31536000' };
@@ -112,6 +131,7 @@ export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url); const p = url.pathname;
     if (p === '/api/health') return json({ ok: true, app: 'rs-sons-accounting', version: VERSION, mode: 'hosted' });
+    if (p === '/api/health/mail') return json(await mailProbe());   // v2.2: can this server reach Gmail's mail server? (fixed host, no login, cached 10 min)
     if (p === '/api/call') {
       if (req.method !== 'POST') return json({ ok: false, error: 'POST only' }, 405);
       if (req.headers.get('x-rs-client') !== '1' || !/application\/json/.test(req.headers.get('content-type') || '')) return json({ ok: false, error: 'Bad request' }, 403);

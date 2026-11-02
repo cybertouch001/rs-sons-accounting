@@ -239,3 +239,17 @@ html[data-theme=dark] .qs-row:hover{background:#22344d}
   h2.title{gap:6px}
   #docview .dv-bar{flex-wrap:wrap;gap:6px}
 }
+
+/* v2.2 view-only, live updates, email OTP */
+.ro-off{opacity:.42!important;pointer-events:none!important;cursor:not-allowed!important;filter:grayscale(.6)}
+.ro-in{background:#f3f5f8!important;color:var(--text)!important;cursor:default}
+body.viewonly .mi[data-s=voucher],body.viewonly .mi[data-s=physicalStock],body.viewonly .mi[data-s=bankImport],body.viewonly .mi[data-s=backup],body.viewonly .mi[data-s=restore],body.viewonly .mi[data-s=users],body.viewonly .mi[data-s=adminSettings],body.viewonly .mi[data-s=importExport],body.viewonly .mi[data-s=sql],body.viewonly .mi[data-s=dataFolder],body.viewonly .mi[data-s=autoBackups],body.viewonly .mi[data-s=companyEdit],body.viewonly .mi[data-s=reminders],body.viewonly .mi[data-s=budgets],body.viewonly .mi[data-s=recurring],body.viewonly .mi[data-s=orderMenu],body.viewonly .mi[data-s=stockMenu],body.viewonly .mi[data-s=labels],body.viewonly .mi[data-s=reminderLetters],body.viewonly #lnew{display:none!important}
+.ro-pill{display:inline-block;background:#e8f1fb;color:#1d5fa8;border:1px solid #b9d2ee;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:600}
+#top .ro-pill{background:rgba(255,255,255,.15);color:#fff;border-color:rgba(255,255,255,.35)}
+#toast div.live{background:#0f6f71}
+#tbell{position:relative}#tbell .badge{position:absolute;top:-5px;right:-6px;background:#e0a526;color:#0b2545;border-radius:9px;font-size:10px;font-weight:700;padding:0 5px;line-height:16px}
+#liveBanner{position:fixed;left:50%;transform:translateX(-50%);top:54px;z-index:1900;background:#fff7dc;border:1px solid #e0a526;color:#5a4300;border-radius:8px;padding:7px 10px;display:flex;gap:8px;align-items:center;box-shadow:0 6px 18px rgba(0,0,0,.18);max-width:94vw}
+.otp-box{margin-top:4px}.otp-h{font-size:16px;font-weight:700;color:var(--navy);margin-bottom:4px}.otp-s{font-size:13px;color:var(--muted);margin-bottom:10px}
+.otp-links{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px;font-size:12.5px}.otp-links a{color:var(--blue);text-decoration:none}.otp-links a.off{color:var(--muted);pointer-events:none}
+.otp-help{margin-top:8px;font-size:11.5px;color:var(--muted)}
+[data-theme=dark] .ro-in{background:#1d2633!important}[data-theme=dark] #liveBanner{background:#3a3115;color:#ffe9a8}

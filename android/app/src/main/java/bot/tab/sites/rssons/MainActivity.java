@@ -3,6 +3,11 @@ package bot.tab.sites.rssons;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.KeyguardManager;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.pm.PackageManager;
 import android.content.SharedPreferences;
 import android.graphics.Canvas;
 import android.graphics.pdf.PdfDocument;
@@ -274,7 +279,7 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onSaveInstanceState(Bundle out) { super.onSaveInstanceState(out); if (loaded) web.saveState(out); }
-    @Override protected void onPause() { super.onPause(); pausedAt = System.currentTimeMillis(); CookieManager.getInstance().flush(); }
+    @Override protected void onPause() { super.onPause(); inFront = false; pausedAt = System.currentTimeMillis(); CookieManager.getInstance().flush(); }
     @Override protected void onDestroy() {
         try { ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE); if (cm != null && netCb != null) cm.unregisterNetworkCallback(netCb); } catch (Exception ignored) { }
         super.onDestroy();
@@ -328,7 +333,25 @@ public class MainActivity extends Activity {
         if (unlocked && (pausedAt == 0 || System.currentTimeMillis() - pausedAt < 60000)) return;
         unlocked = false; lockView.setVisibility(View.VISIBLE); askUnlock();
     }
-    @Override protected void onResume() { super.onResume(); maybeLock(); }
+    @Override protected void onResume() { super.onResume(); inFront = true; maybeLock(); try { NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE); if (nm != null) nm.cancel(LIVE_ID); } catch (Exception ignored) {} }
+
+    // v2.2 live updates: another user's save, shown in the phone's notification bar while the app is in the background
+    private volatile boolean inFront = true; private boolean askedNotify = false; private static final int LIVE_ID = 2207;
+    private void liveNotify(String title, String text) {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+            if (!askedNotify) { askedNotify = true; requestPermissions(new String[] { "android.permission.POST_NOTIFICATIONS" }, 22); }
+            return;
+        }
+        if (inFront) return;   // in front, the app shows its own banner
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE); if (nm == null) return;
+        Notification.Builder b;
+        if (Build.VERSION.SDK_INT >= 26) { nm.createNotificationChannel(new NotificationChannel("live", "Live updates (other users)", NotificationManager.IMPORTANCE_DEFAULT)); b = new Notification.Builder(this, "live"); }
+        else b = new Notification.Builder(this);
+        Intent open = new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent pi = PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0));
+        b.setSmallIcon(R.mipmap.ic_launcher).setContentTitle(title).setContentText(text).setStyle(new Notification.BigTextStyle().bigText(text)).setAutoCancel(true).setContentIntent(pi).setWhen(System.currentTimeMillis()).setShowWhen(true);
+        nm.notify(LIVE_ID, b.build());
+    }
     private void jsLockState() {
         String js = "window.rsLockChanged&&window.rsLockChanged(" + lockOn() + ")";
         if (web != null) web.evaluateJavascript(js, null);
@@ -339,6 +362,11 @@ public class MainActivity extends Activity {
     /** What the web app may ask of the phone. Only the server's own pages get answers. */
     class Bridge {
         @JavascriptInterface public String version() { return BuildConfig.VERSION_NAME; }
+        @JavascriptInterface public void notify(final String title, final String text) {
+            if (!trusted()) return;
+            final String t = title == null ? "" : title.length() > 80 ? title.substring(0, 80) : title; final String x = text == null ? "" : text.length() > 300 ? text.substring(0, 300) : text;
+            runOnUiThread(() -> { try { liveNotify(t, x); } catch (Exception ignored) {} });
+        }
 
         @JavascriptInterface public String saveFile(String name, String mime, String b64) {
             JSONObject out = new JSONObject();

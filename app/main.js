@@ -426,10 +426,12 @@ function shellSenderOk(e) {
 }
 function uniqueFile(dir, name, ext) { fs.mkdirSync(dir, { recursive: true }); let f = path.join(dir, safeName(name) + '.' + ext), i = 2; while (fs.existsSync(f)) f = path.join(dir, `${safeName(name)} (${i++}).${ext}`); return f; }
 const SHELL = {
-  info: () => ({ desktop: true, version: VERSION, server: cloudServer(), custom: !!sys.cloudServer, defaultServer: DEFAULT_SERVER }),
-  offline: () => { setTimeout(() => backToLocal('user'), 30); return true; },
+  info: () => ({ desktop: true, version: VERSION, server: cloudServer(), custom: !!sys.cloudServer, defaultServer: DEFAULT_SERVER, viewerLock: !!sys.viewerLock }),
+  // v2.2: after a view-only user logs in on this PC, the offline / own-server choices are hidden and refused until a non-viewer logs in
+  setViewerLock: (on) => { if (!!sys.viewerLock !== !!on) { sys.viewerLock = !!on; saveSys(); startupLog('view-only device: ' + !!on); } return true; },
+  offline: () => { if (sys.viewerLock) throw new Error('View-only user: offline mode band hai'); setTimeout(() => backToLocal('user'), 30); return true; },
   retry: () => { loadCloud(); return true; },
-  setServer: async (url) => { const base = await checkServer(url); setTimeout(() => switchMode('cloud', base), 30); return true; },
+  setServer: async (url) => { if (sys.viewerLock) throw new Error('View-only user: server badal nahi sakte'); const base = await checkServer(url); setTimeout(() => switchMode('cloud', base), 30); return true; },
   resetServer: () => { setTimeout(() => switchMode('cloud', null), 30); return true; },
   saveFile: async (name, mime, b64) => {
     const ext = (String(name).match(/\.([a-z0-9]{1,6})$/i) || [, 'bin'])[1]; const base = String(name).replace(/\.[a-z0-9]{1,6}$/i, '');
@@ -475,7 +477,7 @@ function createCloudWindow() {
   win.webContents.on('before-input-event', async (e, input) => {
     if (input.type !== 'keyDown') return;
     if (input.control && input.shift && input.key === 'F12') win.webContents.openDevTools({ mode: 'detach' });
-    if (input.control && input.shift && input.key.toLowerCase() === 'l') { const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Cancel', 'Offline mode'], defaultId: 1, message: 'Offline mode kholein? (sirf is PC ki files) · Switch to offline mode (company files on this PC)?' }); if (r.response === 1) backToLocal('user'); }
+    if (input.control && input.shift && input.key.toLowerCase() === 'l' && !sys.viewerLock) { const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Cancel', 'Offline mode'], defaultId: 1, message: 'Offline mode kholein? (sirf is PC ki files) · Switch to offline mode (company files on this PC)?' }); if (r.response === 1) backToLocal('user'); }
   });
   let crashes = 0;
   win.webContents.on('render-process-gone', (e, d) => { startupLog(`screen process ended: ${d.reason}`); if (d.reason !== 'clean-exit' && win && !win.isDestroyed() && ++crashes <= 3) loadCloud(); });

@@ -10,6 +10,6 @@ const downloads = dl ? JSON.parse(fs.readFileSync(dl, 'utf8')) : {};
 const bootstrap = boot ? JSON.parse(fs.readFileSync(boot, 'utf8')) : null;
 if (bootstrap && !/^pbkdf2-sha256\$\d+\$[0-9a-f]+\$[0-9a-f]{64}$/.test(bootstrap.pw)) throw new Error('bootstrap.pw must be a password HASH');
 fs.writeFileSync(path.join(here, 'worker-config.js'), `export const DOWNLOADS = ${JSON.stringify(downloads)};\nexport const ADMIN_BOOTSTRAP = ${JSON.stringify(bootstrap)};\nexport const VERSION = ${JSON.stringify(version)};\n`);
-await build({ entryPoints: [path.join(here, 'worker.js')], bundle: true, format: 'esm', platform: 'browser', minify: true, outfile: out, external: ['fs', 'path', 'crypto', 'stream'], logLevel: 'warning' });
+await build({ entryPoints: [path.join(here, 'worker.js')], bundle: true, format: 'esm', platform: 'browser', minify: true, outfile: out, external: ['fs', 'path', 'crypto', 'stream', 'cloudflare:sockets'], logLevel: 'warning' });
 fs.writeFileSync(path.join(here, 'worker-config.js'), "export const DOWNLOADS = {};\nexport const ADMIN_BOOTSTRAP = null;\nexport const VERSION = '" + version + "';\n");
 console.log('built', out, fs.statSync(out).size, 'bytes');

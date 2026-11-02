@@ -8,6 +8,7 @@ const ADM = require('../../app/core/admin');
 const DOCS = require('../../app/core/docs');
 const XB = require('../../app/core/exports');
 const PR = require('../../app/core/print');
+const MAIL = require('./mailer');
 const U = core.util;
 
 const APP_NAME = 'R&S Sons Accounting';
@@ -54,9 +55,84 @@ function createService(env) {
     if (now - Number(s.last_seen) > 60000) await sys.touchSession(th, now, now + (long ? LONG_IDLE_MS : IDLE_MS));
     return { th, s, u };
   }
-  function pubUser(u) { return u && { username: u.username, role: u.role, mustChange: !!u.must_change, fullName: u.full_name || '' }; }
+  function pubUser(u) { return u && { username: u.username, role: u.role, mustChange: !!u.must_change, fullName: u.full_name || '', email: u.email || '', emailOtp: Number(u.otp) !== 0 }; }
   function companiesOf(u) { if (!u.companies || u.companies === '*') return '*'; try { const a = JSON.parse(u.companies); return Array.isArray(a) ? a : '*'; } catch (_) { return '*'; } }
   function canSeeCompany(u, id) { const a = companiesOf(u); return a === '*' || a.includes(id); }
+
+  // ---------- v2.2 email OTP + live-update helpers ----------
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const OTP_TTL_MS = 10 * 60000, OTP_TRIES = 5, OTP_RESEND_MS = 30000, OTP_MAX_SENDS = 5, OTP_HOURLY = 10;
+  function maskEmail(e) { e = String(e || ''); const [a, d] = e.split('@'); if (!d) return e; return (a.length <= 2 ? a[0] + '*' : a.slice(0, 2) + '*'.repeat(Math.min(6, a.length - 2))) + '@' + d; }
+  function backupList(u) { try { const a = JSON.parse(u.backup_codes || '[]'); return Array.isArray(a) ? a : []; } catch (_) { return []; } }
+  async function otpRequired(u) {
+    if (!u || !u.email || Number(u.otp) === 0) return false;
+    const o = await sys.kv('otp', {}) || {}; if (!o.enabled) return false;
+    const m = await sys.kv('mail', {}) || {}; return !!(m.user && m.pass && env.netOpen);
+  }
+  async function newCode() { return String(parseInt(CR.randomHex(4), 16) % 1000000).padStart(6, '0'); }
+  async function sendMail(to, subject, text, html) {
+    if (!env.netOpen) throw new ApiError('This server cannot send email');
+    const m = await sys.kv('mail', {}) || {}; if (!m.user || !m.pass) throw new ApiError('Email (OTP) settings are not filled in Admin Settings');
+    return MAIL.smtpSend(env.netOpen, Object.assign({ fromName: await appName() }, m, m.fromName ? {} : { fromName: await appName() }), { to, subject, text, html });
+  }
+  function mailHint(m, e) {
+    const s = String(e && e.message || e);
+    if (e && e.smtpCode === 535 || /AUTH|Username and Password not accepted|BadCredentials/i.test(s)) return (m.provider === 'gmail' ? 'Gmail ne login mana kiya — Gmail ka normal password nahi chalega: Google Account → Security → 2-Step Verification ON → App passwords se 16 letter ka App Password banakar daalein. ' : 'Email login galat hai (username / password). ') + '[' + s.slice(0, 160) + ']';
+    if (/did not answer|closed|ECONN|connect|network/i.test(s)) return 'Email server se connect nahi hua (host/port check karein): ' + s.slice(0, 160);
+    return 'Email nahi gaya: ' + s.slice(0, 200);
+  }
+  async function sendOtpMail(u, code, ctx) {
+    const name = await appName(); const when = new Date(ctx.now + 5.5 * 3600000).toISOString().replace('T', ' ').slice(0, 16) + ' IST';
+    const text = `Namaste ${u.full_name || u.username},\n\nAapka ${name} login OTP hai: ${code}\n\nYe 10 minute tak chalega. Ye code kisi ko mat batayein — hamari team kabhi OTP nahi maangti.\nAgar ye login aapne nahi kiya, to turant apna password badlein aur admin ko batayein.\n\nYour login code is ${code} (valid for 10 minutes).\n\nUser: ${u.username} · ${when}${ctx.ip ? ' · IP ' + ctx.ip : ''}\n— ${name}`;
+    const html = `<div style="font-family:Arial,sans-serif;max-width:460px;margin:auto;padding:18px;border:1px solid #dde3ea;border-radius:10px"><div style="font-size:15px;color:#1f3a5f;font-weight:bold">${esc(name)}</div><p style="font-size:14px;color:#333">Namaste ${esc(u.full_name || u.username)}, aapka login OTP:</p><div style="font-size:32px;letter-spacing:8px;font-weight:bold;color:#0b7a75;margin:10px 0">${code}</div><p style="font-size:13px;color:#555">10 minute tak valid. Ye code kisi ko mat batayein.<br>Agar ye login aapne nahi kiya, to turant password badlein aur admin ko batayein.</p><p style="font-size:12px;color:#888">Your login code (valid 10 minutes). User: ${esc(u.username)} · ${when}${ctx.ip ? ' · IP ' + esc(ctx.ip) : ''}</p></div>`;
+    return sendMail(u.email, `${code} — ${name} login OTP`, text, html);
+  }
+  async function startChallenge(ctx, u, remember) {
+    if (await sys.recentChallenges(u.id, ctx.now - 3600000) >= OTP_HOURLY) throw new ApiError('Is ghante bahut OTP bheje gaye — 1 ghante baad try karein · Too many codes this hour, try later.', 'otp_limit', 429);
+    const challenge = CR.randomToken(); const h = await CR.sha256Hex(challenge); const code = await newCode();
+    let mailOk = 1, err = '';
+    try { await sendOtpMail(u, code, ctx); } catch (e) { mailOk = 0; err = e.message || String(e); }
+    await sys.addChallenge({ id_hash: h, user_id: u.id, code_hash: await CR.sha256Hex(h + ':' + code), now: ctx.now, expires_at: ctx.now + OTP_TTL_MS, remember, ip: ctx.ip, mail_ok: mailOk });
+    if (Math.random() < 0.1) await sys.purgeChallenges(ctx.now - 2 * 3600000);
+    await sys.log(u.username, mailOk ? 'Login OTP sent' : 'Login OTP email FAILED', mailOk ? maskEmail(u.email) : err.slice(0, 200), ctx.ip);
+    return { otp: true, challenge, sentTo: maskEmail(u.email), expiresIn: OTP_TTL_MS / 1000, resendIn: OTP_RESEND_MS / 1000, tries: OTP_TRIES, hasBackup: backupList(u).length > 0,
+      mailFailed: !mailOk, error: mailOk ? '' : 'OTP email nahi gaya · Could not send the email. Admin se kahein (Admin Settings → Email OTP), ya backup code use karein.' };
+  }
+  async function startSession(ctx, u, remember, how) {
+    const token = CR.randomToken(); const th = await CR.sha256Hex(token);
+    await sys.addSession({ token_hash: th, user_id: u.id, now: ctx.now, expires_at: ctx.now + (remember ? LONG_IDLE_MS : IDLE_MS), ip: ctx.ip, ua: ctx.ua });
+    await Promise.all([sys.updateUser(u.id, { last_login: new Date(ctx.now).toISOString() }), sys.log(u.username, (remember ? 'Login (stay logged in)' : 'Login') + (how ? ' · ' + how : ''), '', ctx.ip),
+      Math.random() < 0.05 ? sys.purgeSessions(ctx.now) : null]);
+    ctx.out.setToken = token; ctx.out.cookieMaxAge = Math.round((remember ? LONG_MAX_MS : MAX_MS) / 1000);
+    return pubUser(u);
+  }
+  const SIMPLE_NAMES = { units: 'Unit', godowns: 'Godown', item_groups: 'Item group', cost_centres: 'Cost centre', salesmen: 'Salesman', price_lists: 'Price list', boms: 'BOM', reminders: 'Note / reminder', employees: 'Employee', fixed_assets: 'Fixed asset' };
+  const METHOD_LABELS = { duplicateVoucher: ['new', 'Voucher copy'], setVoucherStatus: ['edit', 'Voucher status'], setBankDate: ['edit', 'Bank date (BRS)'], saveBudget: ['edit', 'Budget'], postDepreciation: ['new', 'Depreciation journal'], payrollProcess: ['new', 'Payroll'],
+    saveItrProfile: ['edit', 'ITR details'], gstr2bImport: ['new', 'GSTR-2B import'], bankImport: ['new', 'Bank statement import'], bankRematch: ['edit', 'Bank auto-match'], bankMatch: ['edit', 'Bank match'], bankUnmatch: ['edit', 'Bank un-match'], bankCreateVoucher: ['new', 'Voucher from bank line'],
+    saveRecurring: ['edit', 'Recurring voucher'], runRecurring: ['new', 'Recurring vouchers posted'], savePriceListItems: ['edit', 'Price list rates'], saveBom: ['edit', 'BOM'], payrollDelete: ['delete', 'Payroll month'], gstr2bDelete: ['delete', 'GSTR-2B'], bankDeleteStatement: ['delete', 'Bank statement'], deleteRecurring: ['delete', 'Recurring voucher'], saveSettings: ['edit', 'Company settings'] };
+  function nm(x) { return x && x.name ? ` "${String(x.name).slice(0, 60)}"` : ''; }
+  function changeLabel(method, args, res, pre) {
+    const a0 = args[0];
+    try {
+      if (method === 'saveVoucher') { const T = core.VTYPES[a0 && a0.vtype] || {}; return [a0 && a0.id ? 'edit' : 'new', `${T.short || 'Voucher'}${res && res.number ? ' #' + res.number : ''}`]; }
+      if (method === 'deleteVoucher') return ['delete', pre ? `${pre.vtype_name || 'Voucher'} #${pre.number}` : 'Voucher'];
+      if (method === 'saveLedger') return [a0 && a0.id ? 'edit' : 'new', 'Ledger' + nm(a0)];
+      if (method === 'deleteLedger') return ['delete', 'Ledger' + nm(pre)];
+      if (method === 'saveItem') return [a0 && a0.id ? 'edit' : 'new', 'Item' + nm(a0)];
+      if (method === 'deleteItem') return ['delete', 'Item' + nm(pre)];
+      if (method === 'saveGroup') return [a0 && a0.id ? 'edit' : 'new', 'Group' + nm(a0)];
+      if (method === 'deleteGroup') return ['delete', 'Group'];
+      if (method === 'saveSimple') return [args[1] && args[1].id ? 'edit' : 'new', (SIMPLE_NAMES[a0] || 'Master') + nm(args[1])];
+      if (method === 'deleteSimple') return ['delete', SIMPLE_NAMES[a0] || 'Master'];
+    } catch (_) {}
+    const l = METHOD_LABELS[method]; return l || ['edit', method.replace(/([A-Z])/g, ' $1').toLowerCase()];
+  }
+  async function recordChange(ctx, kind, label) {
+    if (!ctx.companyId || !ctx.user) return;
+    const p = sys.addChange({ company_id: ctx.companyId, at: ctx.now, username: ctx.user.username, full_name: ctx.user.full_name || '', kind, label, sess: (ctx.th || '').slice(0, 12) })
+      .then(() => Math.random() < 0.02 ? sys.purgeChanges(ctx.now - 3 * 86400000) : null).catch(() => {});
+    if (ctx.defer) ctx.defer(p); else await p;
+  }
 
   async function handle(req) {
     // req: { token, method, args, ip, ua, now }
@@ -90,7 +166,7 @@ function createService(env) {
     const r = await h(ctx, ...a);
     return r === undefined ? null : r;
   }
-  const BATCH_NO = new Set(['auth.login', 'auth.logout', 'auth.changePassword']);   // these set/clear the login cookie
+  const BATCH_NO = new Set(['auth.login', 'auth.logout', 'auth.changePassword', 'auth.verifyOtp', 'auth.resendOtp', 'mail.test']);   // these set/clear the login cookie
   function need(ctx, role) {
     if (!ctx.user) throw new ApiError('Please log in', 'auth', 401);
     if (!PERMS.allowed(ctx.user.role, role)) throw new ApiError(`Your user role (${ctx.user.role}) is not allowed to do this. Ask the admin.`, 'forbidden', 403);
@@ -122,7 +198,7 @@ function createService(env) {
     return { id, name: nm };
   }
 
-  const PUBLIC = new Set(['app.info', 'auth.login', 'auth.logout']);
+  const PUBLIC = new Set(['app.info', 'auth.login', 'auth.logout', 'auth.verifyOtp', 'auth.resendOtp']);
   const MUSTCHANGE_OK = new Set(['auth.changePassword', 'admin.passwordStrength']);
 
   const H = {
@@ -149,12 +225,113 @@ function createService(env) {
       await Promise.all(keys.map(k => sys.clearAttempt(k)));
       // re-hash old (v1.1, 120k) or weaker hashes to the current format
       if (!String(u.pw).startsWith(`pbkdf2-sha256$${PBKDF2_ITER}$`)) await sys.updateUser(u.id, { pw: await hashPassword(pw) });
-      const token = CR.randomToken(); const th = await CR.sha256Hex(token);
-      await sys.addSession({ token_hash: th, user_id: u.id, now: ctx.now, expires_at: ctx.now + (remember ? LONG_IDLE_MS : IDLE_MS), ip: ctx.ip, ua: ctx.ua });
-      await Promise.all([sys.updateUser(u.id, { last_login: new Date(ctx.now).toISOString() }), sys.log(u.username, remember ? 'Login (stay logged in)' : 'Login', '', ctx.ip),
-        Math.random() < 0.05 ? sys.purgeSessions(ctx.now) : null]);
-      ctx.out.setToken = token; ctx.out.cookieMaxAge = Math.round((remember ? LONG_MAX_MS : MAX_MS) / 1000);
-      return pubUser(u);
+      // v2.2: email OTP step — the password was right, now a 6-digit code goes to the user's email; no session until it is entered
+      if (await otpRequired(u)) return startChallenge(ctx, u, remember);
+      return startSession(ctx, u, remember, '');
+    },
+    'auth.verifyOtp': async (ctx, challenge, code) => {
+      const h = await CR.sha256Hex(String(challenge || '')); const ch = challenge ? await sys.challenge(h) : null;
+      if (!ch) throw new ApiError('OTP ka samay khatam ho gaya — dobara login karein · Please log in again.', 'otp_expired', 401);
+      if (Number(ch.expires_at) < ctx.now) { await sys.deleteChallenge(h); throw new ApiError('OTP expire ho gaya (10 minute) — dobara login karein · The code expired, please log in again.', 'otp_expired', 401); }
+      const u = await sys.userById(ch.user_id); if (!u || !u.active) { await sys.deleteChallenge(h); throw new ApiError('User is not active', 'bad_login', 401); }
+      const at = await sys.attempt('u:' + u.username.toLowerCase()); if (at && Number(at.until) > ctx.now) throw new ApiError(`Too many wrong attempts. Try again in ${Math.ceil((Number(at.until) - ctx.now) / 1000)} s.`, 'rate_limited', 429);
+      const raw = String(code || '').trim(); const digits = raw.replace(/\D/g, '');
+      let ok = false, how = 'OTP';
+      if (/^\d{6}$/.test(digits) && raw.replace(/[\s-]/g, '') === digits) ok = (await CR.sha256Hex(h + ':' + digits)) === ch.code_hash;
+      else { const bc = raw.toUpperCase().replace(/[^A-Z0-9]/g, ''); if (bc.length === 8) { const list = backupList(u); const bh = await CR.sha256Hex(u.id + ':' + bc); const i = list.indexOf(bh); if (i >= 0) { list.splice(i, 1); await sys.updateUser(u.id, { backup_codes: JSON.stringify(list) }); ok = true; how = 'backup code'; } } }
+      if (!ok) {
+        const tries = Number(ch.attempts || 0) + 1; const left = OTP_TRIES - tries;
+        const k = 'u:' + u.username.toLowerCase(); const a2 = await sys.attempt(k) || { fails: 0 }; const fails = Number(a2.fails || 0) + 1;
+        await sys.setAttempt(k, fails, fails >= 5 ? ctx.now + Math.min(15 * 60000, 60000 * Math.pow(2, Math.floor(fails / 5) - 1)) : 0, ctx.now);
+        await sys.log(u.username, 'Login OTP wrong', `try ${tries} of ${OTP_TRIES}`, ctx.ip);
+        if (left <= 0) { await sys.deleteChallenge(h); throw new ApiError('Galat OTP — 5 baar galat ho gaya, dobara login karein · Wrong code too many times, please log in again.', 'otp_expired', 401); }
+        await sys.updateChallenge(h, { attempts: tries });
+        throw new ApiError(`Galat OTP · Wrong code (${left} ${left === 1 ? 'try' : 'tries'} left)`, 'otp_wrong', 401);
+      }
+      await sys.deleteChallenge(h); await sys.clearAttempt('u:' + u.username.toLowerCase());
+      if (!Number(u.email_verified)) await sys.updateUser(u.id, { email_verified: 1 });
+      return startSession(ctx, u, !!Number(ch.remember), how);
+    },
+    'auth.resendOtp': async (ctx, challenge) => {
+      const h = await CR.sha256Hex(String(challenge || '')); const ch = challenge ? await sys.challenge(h) : null;
+      if (!ch || Number(ch.expires_at) < ctx.now) throw new ApiError('OTP ka samay khatam ho gaya — dobara login karein · Please log in again.', 'otp_expired', 401);
+      const wait = Math.ceil((Number(ch.last_sent) + OTP_RESEND_MS - ctx.now) / 1000); if (wait > 0) throw new ApiError(`${wait} second baad dobara bhej sakte hain · Wait ${wait} s to resend.`, 'otp_wait', 429);
+      if (Number(ch.sends) >= OTP_MAX_SENDS) throw new ApiError('Bahut baar bheja ja chuka — thodi der baad dobara login karein · Too many resends, log in again later.', 'otp_limit', 429);
+      const u = await sys.userById(ch.user_id); if (!u || !u.active || !u.email) throw new ApiError('User is not active', 'bad_login', 401);
+      if (await sys.recentChallenges(u.id, ctx.now - 3600000) >= OTP_HOURLY) throw new ApiError('Is ghante bahut OTP bheje gaye — 1 ghante baad try karein · Too many codes this hour.', 'otp_limit', 429);
+      const code = await newCode(); let mailOk = 1, err = '';
+      try { await sendOtpMail(u, code, ctx); } catch (e) { mailOk = 0; err = e.message; }
+      await sys.updateChallenge(h, { code_hash: await CR.sha256Hex(h + ':' + code), sends: Number(ch.sends) + 1, last_sent: ctx.now, expires_at: ctx.now + OTP_TTL_MS, mail_ok: mailOk });
+      await sys.log(u.username, mailOk ? 'Login OTP re-sent' : 'Login OTP email FAILED', mailOk ? maskEmail(u.email) : err, ctx.ip);
+      if (!mailOk) throw new ApiError('OTP email nahi gaya · Could not send the email: ' + err + '. Admin se kahein (Admin Settings → Email OTP), ya backup code use karein.', 'otp_mail_failed', 502);
+      return { sentTo: maskEmail(u.email), expiresIn: OTP_TTL_MS / 1000, resendIn: OTP_RESEND_MS / 1000 };
+    },
+    'auth.backupCodes': async (ctx, pw) => {
+      if (!ctx.user) throw new ApiError('Please log in', 'auth', 401); need(ctx, 'operator');
+      if (!(await verifyPassword(pw, ctx.user.pw))) throw new ApiError('Password is wrong');
+      const ALPH = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const codes = [], hashes = [];
+      for (let i = 0; i < 8; i++) { const hex = CR.randomHex(8); let c = ''; for (let j = 0; j < 8; j++) c += ALPH[parseInt(hex.slice(j * 2, j * 2 + 2), 16) % 32]; codes.push(c.slice(0, 4) + '-' + c.slice(4)); hashes.push(await CR.sha256Hex(ctx.user.id + ':' + c)); }
+      await sys.updateUser(ctx.user.id, { backup_codes: JSON.stringify(hashes) }); await sys.log(ctx.user.username, 'Backup codes created', '8 new codes (old ones stop working)', ctx.ip);
+      return codes;
+    },
+    'auth.otpInfo': async (ctx) => { if (!ctx.user) throw new ApiError('Please log in', 'auth', 401); const u = ctx.user; return { email: u.email ? maskEmail(u.email) : '', otpOn: await otpRequired(u), userOtp: Number(u.otp) !== 0, backupLeft: backupList(u).length, globalOn: !!(await sys.kv('otp', {})).enabled }; },
+
+    // ---- v2.2 live updates: every save writes one row; open screens ask "anything new since #seq?" every few seconds ----
+    'sync.poll': async (ctx, since) => {
+      if (!ctx.user) throw new ApiError('Please log in', 'auth', 401);
+      const cid = ctx.companyId; if (!cid || !canSeeCompany(ctx.user, cid)) return { seq: 0, items: [], company: null };
+      if (since == null || since === '' || !Number.isFinite(Number(since))) return { seq: await sys.lastChange(cid), items: [], company: cid };
+      const rows = await sys.changesSince(cid, Number(since)); const me = (ctx.th || '').slice(0, 12);
+      return { company: cid, seq: rows.length ? Number(rows[rows.length - 1].seq) : Number(since), more: rows.length >= 50,
+        items: rows.map(r => ({ seq: Number(r.seq), at: Number(r.at), by: r.username, byName: r.full_name || r.username, kind: r.kind, label: r.label, mine: r.sess === me })) };
+    },
+
+    // ---- v2.2 email (OTP) settings: the admin enters the Gmail address + App Password here; it is kept only in this server's database ----
+    'mail.get': async (ctx) => {
+      need(ctx, 'admin'); const m = await sys.kv('mail', {}) || {}; const o = await sys.kv('otp', {}) || {};
+      const us = await sys.users();
+      return { available: !!env.netOpen, provider: m.provider || 'gmail', host: m.host || '', port: m.port || '', secure: m.secure || '', user: m.user || '', from: m.from || '', fromName: m.fromName || '', hasPass: !!m.pass,
+        testedOk: !!m.testedOk, testedAt: m.testedAt || '', lastError: m.lastError || '', otpEnabled: !!o.enabled, presets: MAIL.PRESETS,
+        users: us.map(u => ({ username: u.username, role: u.role, email: u.email || '', otp: Number(u.otp) !== 0, verified: !!Number(u.email_verified), active: !!u.active })) };
+    },
+    'mail.save': async (ctx, s) => {
+      need(ctx, 'admin'); s = s || {}; const old = await sys.kv('mail', {}) || {};
+      const provider = ['gmail', 'outlook', 'zoho', 'brevo', 'smtp'].includes(s.provider) ? s.provider : 'gmail';
+      const m = { provider, user: String(s.user || '').trim(), from: String(s.from || '').trim(), fromName: String(s.fromName || '').trim().slice(0, 60) };
+      if (m.user && !/^\S+$/.test(m.user)) throw new ApiError('Email login (username) is not valid');
+      if (provider === 'gmail') { if (m.user) MAIL.cleanAddr(m.user); }
+      if (m.from) MAIL.cleanAddr(m.from);
+      if (provider === 'smtp') { m.host = String(s.host || '').trim(); m.port = Number(s.port) || 587; m.secure = s.secure === 'ssl' ? 'ssl' : s.secure === 'none' ? 'none' : 'starttls'; if (!/^[a-z0-9.-]+$/i.test(m.host)) throw new ApiError('SMTP host is not valid'); if (m.secure === 'none' && !/^(localhost|127\.0\.0\.1)$/.test(m.host)) throw new ApiError('Bina encryption sirf isi computer ke relay (localhost) ke liye · No-encryption only for localhost'); if (m.port === 25) throw new ApiError('Port 25 is blocked on the hosted server — use 465 (SSL) or 587 (STARTTLS)'); }
+      const pass = String(s.pass || '').replace(/\s+/g, provider === 'gmail' ? '' : ' ').trim();
+      m.pass = pass || old.pass || '';
+      const same = ['provider', 'user', 'host', 'port', 'secure', 'from'].every(k => String(m[k] || '') === String(old[k] || '')) && m.pass === old.pass;
+      m.testedOk = same ? !!old.testedOk : false; m.testedAt = same ? old.testedAt || '' : ''; m.lastError = same ? old.lastError || '' : '';
+      await sys.setKv('mail', m);
+      if (!m.testedOk) { const o = await sys.kv('otp', {}) || {}; if (o.enabled) await sys.setKv('otp', { enabled: false, by: ctx.user.username, at: new Date(ctx.now).toISOString(), why: 'email settings changed' }); }
+      await sys.log(ctx.user.username, 'Email (OTP) settings saved', `${provider} ${m.user}${pass ? ' (new app password)' : ''}`, ctx.ip);
+      return H['mail.get'](ctx);
+    },
+    'mail.test': async (ctx, to) => {
+      need(ctx, 'admin'); const m = await sys.kv('mail', {}) || {}; to = String(to || ctx.user.email || m.user || '').trim();
+      if (!to) throw new ApiError('Test mail kis email pe bheje? Pehle apna email daalein.');
+      MAIL.cleanAddr(to);
+      try {
+        const r = await sendMail(to, `${await appName()} — test mail ✔`, `Ye test mail hai. Email OTP ki settings sahi hain.\nThis is a test mail: the email (OTP) settings work.\n\n${await appName()}`, null);
+        m.testedOk = true; m.testedAt = new Date(ctx.now).toISOString(); m.lastError = ''; await sys.setKv('mail', m);
+        await sys.log(ctx.user.username, 'Test mail sent', maskEmail(to), ctx.ip);
+        return { ok: true, to: maskEmail(to), id: r.id };
+      } catch (e) {
+        const msg = mailHint(m, e); m.testedOk = false; m.lastError = msg.slice(0, 300); await sys.setKv('mail', m);
+        await sys.log(ctx.user.username, 'Test mail FAILED', msg.slice(0, 200), ctx.ip);
+        throw new ApiError(msg, 'mail_failed', 502);
+      }
+    },
+    'otp.setEnabled': async (ctx, on) => {
+      need(ctx, 'admin'); const m = await sys.kv('mail', {}) || {};
+      if (on && !m.testedOk) throw new ApiError('Pehle "Test mail bhejo" successful karein, tab OTP chalu hoga · Send a successful test mail first.');
+      await sys.setKv('otp', { enabled: !!on, by: ctx.user.username, at: new Date(ctx.now).toISOString() });
+      await sys.log(ctx.user.username, on ? 'Email OTP turned ON' : 'Email OTP turned OFF', on ? 'users with an email get a code at login' : 'logins need only the password', ctx.ip);
+      return H['mail.get'](ctx);
     },
     'auth.logout': async (ctx) => { if (ctx.th) await sys.deleteSession(ctx.th); ctx.out.clearToken = true; return true; },
     'auth.changePassword': async (ctx, oldPw, newPw) => {
@@ -204,30 +381,33 @@ function createService(env) {
     'admin.log': async (ctx) => { need(ctx, 'admin'); return sys.logs(200); },
 
     // ---- users & roles ----
-    'users.list': async (ctx) => { need(ctx, 'admin'); return (await sys.users()).map(u => ({ username: u.username, role: u.role, active: !!u.active, lastLogin: u.last_login || '', created: u.created_at, companies: companiesOf(u), mustChange: !!u.must_change, fullName: u.full_name || '' })); },
+    'users.list': async (ctx) => { need(ctx, 'admin'); return (await sys.users()).map(u => ({ username: u.username, role: u.role, active: !!u.active, lastLogin: u.last_login || '', created: u.created_at, companies: companiesOf(u), mustChange: !!u.must_change, fullName: u.full_name || '', email: u.email || '', otp: Number(u.otp) !== 0, emailVerified: !!Number(u.email_verified) })); },
     'users.save': async (ctx, u) => {
       need(ctx, 'admin'); u = u || {};
       if (!u.username || !/^[\w.@-]{2,30}$/.test(u.username)) throw new ApiError('Username: 2–30 letters/numbers');
       if (!ROLES.includes(u.role)) throw new ApiError('Role must be admin, operator or viewer');
       if (u.password) { const chk = ADM.checkPassword(u.password, { username: u.username }); if (!chk.ok) throw new ApiError('Password: ' + chk.errors.join('; ')); }
+      let email; if (u.email !== undefined) { email = String(u.email || '').trim().toLowerCase(); if (email) { try { MAIL.cleanAddr(email); } catch (_) { throw new ApiError('Email is not valid'); } } }
       let comps = '*'; if (Array.isArray(u.companies)) comps = JSON.stringify(u.companies.map(String)); else if (u.companies && u.companies !== '*') throw new ApiError('Companies must be a list or *');
       const all = await sys.users(); let x = all.find(y => y.username.toLowerCase() === u.username.toLowerCase());
       if (!x) {
         if (!u.password) throw new ApiError('Password is required for a new user');
         ADM.validateUsername(u.username, all.map(y => y.username));
-        await sys.addUser({ username: u.username, pw: await hashPassword(u.password), role: u.role, active: u.active !== false, must_change: u.mustChange !== false, companies: comps, full_name: u.fullName });
+        await sys.addUser({ username: u.username, pw: await hashPassword(u.password), role: u.role, active: u.active !== false, must_change: u.mustChange !== false, companies: comps, full_name: u.fullName, email: email || null, otp: u.otp !== false });
         await sys.log(ctx.user.username, 'User created', `${u.username} (${u.role})`, ctx.ip);
       } else {
         if (x.id === ctx.user.id && u.role !== 'admin') throw new ApiError('You cannot remove your own admin role');
         if (x.id === ctx.user.id && u.active === false) throw new ApiError('You cannot deactivate yourself');
         const f = { role: u.role, active: u.active === false ? 0 : 1, companies: comps };
         if (u.fullName !== undefined) f.full_name = u.fullName;
+        if (email !== undefined && email !== (x.email || '')) { f.email = email || null; f.email_verified = 0; }
+        if (u.otp !== undefined) f.otp = u.otp === false || u.otp === 0 ? 0 : 1;
         if (u.password) { f.pw = await hashPassword(u.password); f.must_change = u.mustChange === false ? 0 : 1; }
         const others = all.filter(y => y.id !== x.id);
         if (!others.some(y => y.role === 'admin' && y.active) && !(f.role === 'admin' && f.active)) throw new ApiError('At least one active admin is required');
         await sys.updateUser(x.id, f);
         if (u.password || f.active === 0) await sys.deleteUserSessions(x.id, ctx.th);
-        await sys.log(ctx.user.username, 'User changed', `${x.username}: role ${f.role}${f.active ? '' : ', deactivated'}${u.password ? ', password reset' : ''}`, ctx.ip);
+        await sys.log(ctx.user.username, 'User changed', `${x.username}: role ${f.role}${f.active ? '' : ', deactivated'}${u.password ? ', password reset' : ''}${f.email !== undefined ? ', email ' + (f.email ? maskEmail(f.email) : 'removed') : ''}${f.otp !== undefined ? ', OTP ' + (f.otp ? 'on' : 'off') : ''}`, ctx.ip);
       }
       return true;
     },
@@ -283,6 +463,7 @@ function createService(env) {
     'company.saveSettings': async (ctx, s) => {
       need(ctx, 'admin'); const r = await withCompany(ctx, 'write', c => c.saveSettings(s));
       const f = {}; if (s.name) f.name = s.name; if (s.gstin !== undefined) f.gstin = s.gstin; if (Object.keys(f).length) await sys.updateCompany(ctx.companyId, f);
+      await recordChange(ctx, 'edit', 'Company settings');
       return r;
     },
     'company.delete': async (ctx, id, confirmed) => {
@@ -310,7 +491,15 @@ function createService(env) {
       const role = PERMS.roleFor(method); if (!role) throw new ApiError('Unknown action ' + method);
       need(ctx, role);
       if (method === 'saveSettings') return H['company.saveSettings'](ctx, ...args);
-      return withCompany(ctx, role === 'viewer' ? 'read' : 'write', c => c[method](...args));
+      if (role === 'viewer') return withCompany(ctx, 'read', c => c[method](...args));
+      if (method === 'sqlQuery') return withCompany(ctx, 'write', c => c[method](...args));   // read-only SELECT (admin)
+      let pre = null;
+      const res = await withCompany(ctx, 'write', c => {
+        try { if (method === 'deleteVoucher') pre = c.voucher(args[0]); else if (method === 'deleteLedger') pre = c.ledger(args[0]); else if (method === 'deleteItem') pre = c.item(args[0]); } catch (_) {}
+        return c[method](...args);
+      });
+      const [kind, label] = changeLabel(method, args, res, pre); await recordChange(ctx, kind, label);
+      return res;
     },
 
     // ---- documents & files (the browser shows / prints the HTML; "Save as PDF" in the print window makes the PDF) ----
@@ -324,7 +513,7 @@ function createService(env) {
     'export.excelBook': async (ctx, sheets, name) => { const wb = XLSX.utils.book_new(); for (const sh of sheets || []) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sh.rows || []), String(sh.name || 'Sheet').slice(0, 30)); return file(name || 'Export', 'xlsx', new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }))); },
     'masters.export': async (ctx) => withCompany(ctx, 'read', c => file('Masters ' + c.setting('name'), 'xlsx', XB.mastersBook(XLSX, c))),
     'masters.template': async () => file('R&S Sons import template', 'xlsx', XB.templateBook(XLSX)),
-    'masters.importFile': async (ctx, f) => { need(ctx, 'operator'); const wb = XLSX.read(CR.fromB64(f.b64), { type: 'array' }); return withCompany(ctx, 'write', c => XB.importMasters(XLSX, c, wb)); },
+    'masters.importFile': async (ctx, f) => { need(ctx, 'operator'); const wb = XLSX.read(CR.fromB64(f.b64), { type: 'array' }); const r = await withCompany(ctx, 'write', c => XB.importMasters(XLSX, c, wb)); await recordChange(ctx, 'new', 'Masters import (Excel)'); return r; },
     'file.rows': async (ctx, f) => { if (!f || !f.b64) throw new ApiError('Choose a file'); return XB.sheetRows(XLSX, CR.fromB64(f.b64)); },
   };
   async function companyFor(ctx) {

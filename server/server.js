@@ -28,13 +28,15 @@ const { SysStore } = require('./lib/sysstore');
 const { NodeSysDriver, NodeCompanyStore, openDb } = require('./lib/store-node');
 const { createService } = require('./lib/service');
 const CR = require('./lib/crypto-node');
+const { openNode } = require('./lib/net-node');
 const VERSION = require(path.join(APP, 'package.json')).version;
 
 function makeService() {
   fs.mkdirSync(CFG.dataDir, { recursive: true });
   const sys = new SysStore(new NodeSysDriver(path.join(CFG.dataDir, 'system.db')));
   const store = new NodeCompanyStore(CFG.dataDir);
-  const svc = createService({ sys, store, crypto: CR, XLSX, QRCode, version: VERSION, dataLabel: 'Server · ' + CFG.dataDir });
+  sys.onMigrate = async (dump) => { const d = path.join(CFG.dataDir, 'Backups', '_system'); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, `pre-${VERSION}-${Date.now()}.json`), JSON.stringify(dump)); };
+  const svc = createService({ sys, store, crypto: CR, XLSX, QRCode, version: VERSION, netOpen: openNode, dataLabel: 'Server · ' + CFG.dataDir });
   return { sys, store, svc };
 }
 

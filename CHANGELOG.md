@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.2.0 (2 Nov 2026): view-only users, live updates, email OTP login
+
+**Viewer = strictly view only**
+- A user with the Viewer role can only read. Every save / edit / delete / post / import button is disabled and greyed out on every screen and dialog (clicks and shortcuts like Ctrl+S, Alt+C, F4–F9 are stopped before the screen sees them); saved vouchers and masters open read-only.
+- The server refuses every write from a viewer with HTTP 403 (it already checked roles; v2.2 adds tests for each kind of write).
+- The viewer's screen shows only reading screens: no backup / restore, settings, users, company create / delete, data entry, bank import or admin menus. Utilities shows only Change Password, Help and About.
+- A PC or phone where a viewer logs in hides the "Offline mode (sirf is PC pe)", "Advanced: apna server" and online/offline storage choices on the login screen; the Windows app also refuses offline mode and server changes there (Ctrl+Shift+L too) until a non-viewer logs in on that device.
+
+**Live updates between users**
+- Every save writes one small change row on the server. While a company is open, the app asks "anything new since #N?" every 3 s (15 s in the background), on Windows, Android and the browser.
+- Another user's save shows a notification ("Ramesh ne Sales Invoice #INV/12 save kiya") and refreshes the open dashboard / report / list at once. A screen with unsaved typing is never reloaded under you: a "data changed — Refresh" bar appears instead. 🔔 in the top bar lists recent changes.
+- Android: a phone notification while the app is in the background (asks for the notification permission on Android 13+). Windows: a desktop notification when the window is not in front.
+
+**Email OTP login**
+- After the right password, a 6-digit code goes to the user's email; the login finishes only with that code. 10 minutes valid, 5 tries, resend after 30 s (max 5 per login, 10 per hour), wrong codes count toward the account lock-out. New users verify their email with the first OTP, then set their own password.
+- Mail is sent by the server itself over SMTP (TLS 465 or STARTTLS 587; Cloudflare TCP sockets on the hosted server, Node net/tls when self-hosted). The admin enters the sending Gmail address + a Google App Password in Admin › Email OTP; it is stored only in the server database and never sent back to any screen. Gmail, Zoho, Outlook, Brevo or any SMTP server.
+- Safe roll-out: OTP stays OFF until a test mail succeeds; changing the mail login switches it off again until a new test passes. Users without an email log in with the password only.
+- Ways out when email fails: the admin switches OTP off for everyone (one button) or for one user (Users › user › "Login pe email OTP"); every non-viewer can make 8 one-time backup codes (Utilities › Login OTP & backup codes).
+- `/api/health/mail` says whether the server can reach Gmail's mail server.
+
+**Upgrade**
+- Existing users, companies and data are untouched: the users table gets 4 new columns; before that change the server writes a full copy of the system tables (hosted: R2 `backups/_system/`, self-hosted: `Backups/_system/`).
+- Tests: `server/test/v22.test.js` (51 checks: viewer 403s, live changes between two users, OTP with a local test mail server, expiry, tries, resend, backup codes, admin switches), `app/test/e2e-v22.js` (desktop view-only device, 10 checks).
+
 ## 2.1.0 (1 Nov 2026): login-first apps, "login once, data everywhere"
 
 **Apps**

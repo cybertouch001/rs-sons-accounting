@@ -193,6 +193,7 @@ async function enterCompany(info) {
   if (APP.fy && (APP.date < APP.fy.start || APP.date > APP.fy.end)) APP.date = APP.fy.end;
   $('#login').classList.add('hidden'); $('#companies').classList.add('hidden'); $('#app').classList.remove('hidden');
   applyBrand(); buildNav(); setTop(); APP.stack = []; APP.current = null; await cacheP; go('dashboard');
+  if (window.rsLiveStart) window.rsLiveStart();     // v2.2: live updates from other users
 }
 async function refreshCompany() { const info = await api('company.info'); APP.settings = info.settings; APP.info.company = info; setTop(); }
 
@@ -262,8 +263,11 @@ $('#loginForm').addEventListener('submit', async e => {
   const ctx = loginCtx(); const remember = ctx === 'shell' || ctx === 'android' || (ctx === 'web' && $('#lrem').checked);
   const btn = $('#lbtn'); const label = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Logging in…';
   try {
-    APP.user = await api('auth.login', u, p, { remember }); APP.lastPw = p;
+    let lr = await api('auth.login', u, p, { remember });
+    if (lr && lr.otp) { btn.disabled = false; btn.innerHTML = label; lr = await window.rsOtpStep(lr); if (!lr) return; }   // v2.2: email OTP step
+    APP.user = lr; APP.lastPw = p;
     if (loginCtx() !== 'local') { try { localStorage.setItem('rs.lastUser', APP.user.username); } catch (_) {} }
+    if (window.rsAfterLogin) window.rsAfterLogin(APP.user);
     btn.disabled = false; btn.innerHTML = label;
     if (APP.user.mustChange) { const ok = await changePassword(true); APP.lastPw = null; if (!ok) { await api('auth.logout').catch(() => {}); return; } APP.user.mustChange = false; }
     APP.lastPw = null;
@@ -303,6 +307,7 @@ async function changePassword(force) {
   return r;
 }
 async function showCompanies() {
+  if (window.rsLiveStop) window.rsLiveStop();
   $('#login').classList.add('hidden'); $('#app').classList.add('hidden'); $('#companies').classList.remove('hidden');
   await api('company.close').catch(() => {});
   const list = await api('company.list'); APP.info = await api('app.info');
@@ -451,7 +456,7 @@ async function startApp() {
   try {
     if (!info) info = await api('app.info');
     if (info.server && info.user && !info.user.mustChange) {
-      APP.info = info; APP.user = info.user;
+      APP.info = info; APP.user = info.user; if (window.rsAfterLogin) window.rsAfterLogin(APP.user);
       if (info.company) { try { await enterCompany(info.company); return; } catch (_) {} }
       await showCompanies(); return;
     }

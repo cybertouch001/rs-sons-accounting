@@ -4,6 +4,7 @@
   const server = q.get('server') || (S && S.server) || '';
   if ($('srv')) $('srv').textContent = 'Server: ' + server.replace(/^https?:\/\//, '');
   const on = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+  if (S && S.viewerLock) { ['off', 'adv', 'advbox'].forEach(id => { const el = $(id); if (el) el.style.display = 'none'; }); const s = $('s'); if (s) s.innerHTML = s.innerHTML.replace(/<br>[^<]*Offline[^<]*$/i, ''); }   // v2.2 view-only PC
   on('retry', () => { $('t').textContent = 'Connecting… · जुड़ रहा है'; S && S.retry(); });
   on('off', () => S && S.offline());
   on('adv', () => { $('advbox').classList.toggle('hidden'); $('url').focus(); });
