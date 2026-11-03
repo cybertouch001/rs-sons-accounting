@@ -116,7 +116,13 @@ const SEC = { 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGI
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-src 'self' blob: data:; frame-ancestors 'self'; base-uri 'none'; form-action 'self'";
 const json = (obj, status = 200, extra = {}) => new Response(JSON.stringify(obj), { status, headers: Object.assign({ 'content-type': 'application/json', 'cache-control': 'no-store' }, SEC, extra) });
 // v2.4: approximate place of a login, from Cloudflare's own lookup of the connecting address (city, region, country) — no outside service
-function geoOf(req) { try { const c = req.cf || {}; return [c.city, c.region, c.country].filter(Boolean).join(', ').slice(0, 80); } catch (_) { return ''; } }
+function geoOf(req) {   // approx. place of the visitor's IP: Cloudflare's request.cf, else the location headers the edge adds (when the request was forwarded)
+  try {
+    const c = req.cf || {}; let g = [c.city, c.region, c.country].filter(Boolean);
+    if (!g.length) { const h = n => { const v = req.headers.get(n); return v && v !== 'XX' && v !== 'T1' ? decodeURIComponent(v).slice(0, 40) : ''; }; g = [h('cf-ipcity'), h('cf-region'), h('cf-ipcountry')].filter(Boolean); }
+    return g.join(', ').slice(0, 80);
+  } catch (_) { return ''; }
+}
 function cookieOf(req, name) { const h = req.headers.get('cookie') || ''; for (const part of h.split(';')) { const [k, ...v] = part.trim().split('='); if (k === name) return decodeURIComponent(v.join('=')); } return null; }
 
 async function serveDownload(env, req, d) {
