@@ -75,7 +75,7 @@ async function scenario(label, mk, opts = {}) {
   const alog = await admin.call('admin.log'); ok(alog.some(x => x.action === 'Login failed') && alog.some(x => x.action === 'User created'), 'server log has failed logins and user changes');
   // ---- deactivation & password reset end sessions ----
   await admin.call('users.save', { username: 'seema', role: 'viewer', active: false, companies: '*' });
-  await rejects(viewer.call('c', 'trialBalance', {}), /log in/i, 'deactivated user is logged out immediately');
+  await rejects(viewer.call('c', 'trialBalance', {}), /log in|deactivated by the admin/i, 'deactivated user is logged out immediately');
   // ---- backup / restore / v1.1 import ----
   const bk = await admin.call('company.backup', c1.id); ok(bk.__file.size > 10000 && /\.rsbak$/.test(bk.__file.name), 'backup download (.rsbak) works');
   const rs = await admin.call('company.restore', { name: 'shiv.rsbak', b64: bk.__file.b64 }); ok(/Restored/.test(rs.name), 'backup restores as a new company');

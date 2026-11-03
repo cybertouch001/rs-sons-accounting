@@ -157,7 +157,7 @@ async function loadCache(force) {
 }
 function invalidate() { APP.cache = {}; }
 const groupOf = l => l.group_name;
-function ledgerSrc(filter) { return () => (APP.cache.ledgers || []).filter(l => !filter || filter(l)).map(l => ({ id: l.id, label: l.name, sub: l.group_name + (l.gstin ? ' · ' + l.gstin : ''), key: l.alias || '' })); }
+function ledgerSrc(filter) { return () => (APP.cache.ledgers || []).filter(l => l.active !== 0 && (!filter || filter(l))).map(l => ({ id: l.id, label: l.name, sub: l.group_name + (l.gstin ? ' · ' + l.gstin : ''), key: l.alias || '' })); }
 function itemSrc() { return () => (APP.cache.items || []).filter(i => i.active !== 0).map(i => ({ id: i.id, label: i.name, sub: `${i.hsn || ''} · ${i.gst_rate}% · ₹${inr(i.sale_rate)}`, key: (i.barcode || '') + ' ' + (i.code || '') + ' ' + (i.alias || '') })); }
 function simpleSrc(list, sub) { return () => (APP.cache[list] || []).map(x => ({ id: x.id, label: x.name, sub: sub ? sub(x) : '' })); }
 const groupNamesUnder = (root) => { const gs = APP.cache.groups || []; const r = gs.find(g => g.name === root); const out = new Set(); const walk = id => { const g = gs.find(x => x.id === id); if (!g) return; out.add(g.name); gs.filter(x => x.parent_id === id).forEach(x => walk(x.id)); }; if (r) walk(r.id); return out; };

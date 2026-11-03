@@ -417,8 +417,11 @@ function shellSenderOk(e) {
   } catch (_) { return false; }
 }
 function uniqueFile(dir, name, ext) { fs.mkdirSync(dir, { recursive: true }); let f = path.join(dir, safeName(name) + '.' + ext), i = 2; while (fs.existsSync(f)) f = path.join(dir, `${safeName(name)} (${i++}).${ext}`); return f; }
+// v2.4: shown to the admin in "Logged-in devices" (PC name and Windows version; nothing else about the PC is sent)
+function deviceName() { try { return require('os').hostname().slice(0, 60); } catch (_) { return ''; } }
+function osName() { try { const os = require('os'); if (process.platform !== 'win32') return os.type(); const b = Number((os.release().split('.')[2]) || 0); return b >= 22000 ? 'Windows 11' : 'Windows 10'; } catch (_) { return ''; } }
 const SHELL = {
-  info: () => ({ desktop: true, version: VERSION, server: cloudServer(), custom: false, defaultServer: DEFAULT_SERVER, viewerLock: !!sys.viewerLock }),
+  info: () => ({ desktop: true, version: VERSION, server: cloudServer(), custom: false, defaultServer: DEFAULT_SERVER, viewerLock: !!sys.viewerLock, deviceName: deviceName(), osName: osName() }),
   // v2.2: after a view-only user logs in on this PC, the offline choice is hidden and refused until a non-viewer logs in
   setViewerLock: (on) => { if (!!sys.viewerLock !== !!on) { sys.viewerLock = !!on; saveSys(); startupLog('view-only device: ' + !!on); } return true; },
   offline: () => { if (sys.viewerLock) throw new Error('View-only user: offline mode is not available'); setTimeout(() => backToLocal('user'), 30); return true; },

@@ -35,13 +35,20 @@
       : 'Cannot reach the server. Please try again in a little while.');
     e.code = kind; return e;
   }
+  // v2.4: which device this is, for Admin › Logged-in devices (the Windows app gives the PC name, the Android app the phone model)
+  const DEVICE = (function () {
+    const d = { app: SHELL ? 'desktop' : DROID ? 'android' : 'web' };
+    try { if (SHELL && SHELL.deviceName) { d.name = String(SHELL.deviceName); if (SHELL.osName) d.os = String(SHELL.osName); d.v = String(SHELL.version || ''); } } catch (_) {}
+    try { if (DROID && typeof DROID.deviceName === 'function') d.name = String(DROID.deviceName() || ''); } catch (_) {}
+    try { return encodeURIComponent(JSON.stringify(d)); } catch (_) { return ''; }
+  })();
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const RETRY_OK = new Set(['app.info', 'company.list', 'auth.login']);   // safe to send again after a network failure
   async function send(m, args, tries) {
     let r; netStart();
     const ctl = window.AbortController ? new AbortController() : null; const to = ctl ? setTimeout(() => ctl.abort(), 90000) : null;
     try {
-      try { r = await fetch(API, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-rs-client': '1' }, body: JSON.stringify({ m, a: args || [] }), signal: ctl ? ctl.signal : undefined }); }
+      try { r = await fetch(API, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-rs-client': '1', 'x-rs-device': DEVICE }, body: JSON.stringify({ m, a: args || [] }), signal: ctl ? ctl.signal : undefined }); }
       catch (e) {
         const kind = ctl && ctl.signal.aborted ? 'timeout' : 'network';
         if (kind === 'network' && RETRY_OK.has(m) && (tries || 0) < 2) { await sleep(1500 * ((tries || 0) + 1)); return send(m, args, (tries || 0) + 1); }
@@ -54,7 +61,12 @@
   }
   let authReload = false;
   function apiError(m, j) {
-    if (j.code === 'auth' && m !== 'auth.login' && m !== 'app.info' && !authReload) { authReload = true; setTimeout(() => location.reload(), 1500); }
+    if (j.code === 'auth' && m !== 'auth.login' && m !== 'app.info' && !authReload) {
+      authReload = true;
+      // v2.4: keep the reason (e.g. "The admin logged you out of this device") so the login screen can show it after the reload
+      try { if (j.error && !/session ended/i.test(j.error)) sessionStorage.setItem('rs.authMsg', String(j.error).slice(0, 300)); } catch (_) {}
+      setTimeout(() => location.reload(), 1500);
+    }
     const e = new Error(j.error || 'Error'); e.code = j.code; return e;
   }
   // ---- v2.1: calls made at the same moment go to the server as ONE request (a company opening = 10+ calls → 1 trip) ----

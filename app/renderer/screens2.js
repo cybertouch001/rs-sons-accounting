@@ -6,7 +6,7 @@ SCREENS.itemList = async (el) => {
   const c = await loadCache(true);
   const val = await C('stockValuation', APP.date);
   listScreen(el, { title: 'Stock Items', rows: c.items.map(i => ({ ...i, stock: val[i.id] ? val[i.id].qty : 0 })), onNew: () => go('itemEdit', {}), onOpen: r => go('itemEdit', { id: r.id }),
-    cols: [{ k: 'name', label: 'Item' }, { k: 'group_name', label: 'Group' }, { k: 'hsn', label: 'HSN/SAC' }, { k: 'gst_rate', label: 'GST %', r: 1 }, { k: 'unit_name', label: 'Unit' }, { k: 'sale_rate', label: 'Sale Rate', r: 1, f: r => inr(r.sale_rate) }, { k: 'mrp', label: 'MRP', r: 1, f: r => r.mrp ? inr(r.mrp) : '' }, { k: 'stock', label: 'Stock', r: 1, f: r => r.item_type === 'Service' ? '<span class="pill grey">service</span>' : `<span class="${r.stock < (r.min_stock || 0) ? 'neg' : ''}">${U.r3(r.stock)}</span>` }, { k: 'barcode', label: 'Barcode' }],
+    cols: [{ k: 'name', label: 'Item', f: r => esc(r.name) + (r.active === 0 ? ' <span class="pill grey">inactive</span>' : '') }, { k: 'group_name', label: 'Group' }, { k: 'hsn', label: 'HSN/SAC' }, { k: 'gst_rate', label: 'GST %', r: 1 }, { k: 'unit_name', label: 'Unit' }, { k: 'sale_rate', label: 'Sale Rate', r: 1, f: r => inr(r.sale_rate) }, { k: 'mrp', label: 'MRP', r: 1, f: r => r.mrp ? inr(r.mrp) : '' }, { k: 'stock', label: 'Stock', r: 1, f: r => r.item_type === 'Service' ? '<span class="pill grey">service</span>' : `<span class="${r.stock < (r.min_stock || 0) ? 'neg' : ''}">${U.r3(r.stock)}</span>` }, { k: 'barcode', label: 'Barcode' }],
     searchKeys: ['name', 'group_name', 'hsn', 'barcode', 'code', 'alias', 'brand'], extra: '<button class="btn" id="ilab">Barcode Labels</button><button class="btn" id="ist">Stock Summary</button>' });
   $('#ilab').onclick = () => go('labels'); $('#ist').onclick = () => go('report', { r: 'stockSummary' });
 };
@@ -20,6 +20,7 @@ SCREENS.itemEdit = async (el, p) => {
     { section: 'Rates' }, { k: 'sale_rate', label: 'Sale Rate (excl. GST)', type: 'number' }, { k: 'purchase_rate', label: 'Purchase Rate', type: 'number' }, { k: 'mrp', label: 'MRP', type: 'number' }, { k: 'margin', label: 'Sale rate = purchase + margin %', type: 'number', help: 'Optional helper' },
     { section: 'Stock' }, { k: 'opening_qty', label: 'Opening Qty', type: 'number' }, { k: 'opening_rate', label: 'Opening Rate', type: 'number' }, { k: 'opening_godown_id', label: 'Opening Godown', type: 'select', options: c.godowns.map(x => [x.id, x.name]) }, { k: 'batch_wise', label: 'Track batch / expiry', type: 'check' },
     { k: 'min_stock', label: 'Minimum / Reorder Level', type: 'number' }, { k: 'max_stock', label: 'Maximum Level', type: 'number' }, { k: 'description', label: 'Description (prints on invoice)', w: 2 },
+    { k: 'active', label: 'Active (untick = inactive: hidden from new entries, history stays)', type: 'check', def: 1, w: 2 },
   ];
   el.innerHTML = `<h2 class="title">${p.id ? 'Alter' : 'Create'} Stock Item</h2><div class="card"><div class="form">${formHtml(fields, it)}</div></div>
    <div class="actions">${p.id ? `<button class="btn" id="ild">Item Ledger</button>${can('admin') ? '<button class="btn danger" id="idel">Delete</button>' : ''}` : ''}<span style="flex:1"></span><button class="btn" id="ic">Cancel</button><button class="btn primary" id="is">Save <kbd>Ctrl+S</kbd></button></div>`;
@@ -52,7 +53,7 @@ SCREENS.simpleList = async (el, p) => {
     if (!v) return; try { if (r) v.id = r.id; await C('saveSimple', p.t, v); toast('Saved', 'ok'); render(); } catch (e) { fail(e); }
   };
   listScreen(el, { title: cfg.title, rows, cols: cfg.cols, onNew: () => open(null), onOpen: open, extra: cfg.note ? `<span style="color:var(--muted);font-size:12px">${esc(cfg.note)}</span>` : '' });
-  if (can('admin')) { $('.toolbar', el).insertAdjacentHTML('beforeend', '<button class="btn danger" id="sdel">Delete selected</button>'); $('#sdel').onclick = async () => { const tr = $('#lb tr.cur'); if (!tr) return; const r = rows.filter(x => true)[+tr.dataset.i]; if (r && await confirmBox('Delete "' + r.name + '"?', 'Delete', true)) { try { await C('deleteSimple', p.t, r.id); render(); } catch (e) { fail(e); } } }; }
+  if (can('admin')) { $('.toolbar', el).insertAdjacentHTML('beforeend', '<button class="btn danger" id="sdel">Delete selected</button>'); $('#sdel').onclick = async () => { const tr = $('#lb tr.cur'); if (!tr) return; const r = (el.__shown || rows)[+tr.dataset.i]; if (r && await confirmBox('Delete "' + r.name + '"?', 'Delete', true)) { try { await C('deleteSimple', p.t, r.id); render(); } catch (e) { fail(e); } } }; }
 };
 SCREENS.priceListEdit = async (el, p) => {
   const c = await loadCache(true); const cur = await C('priceListItems', p.id); const map = Object.fromEntries(cur.map(x => [x.item_id, x]));

@@ -122,7 +122,7 @@ async function start() {
         const body = JSON.parse((await readBody(req, CFG.maxBodyMb * 1048576)).toString('utf8') || '{}');
         const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
         try {
-          const r = await svc.handle({ token: cookieOf(req, 'rs_sid'), method: body.m, args: body.a, ip: clientIp(req), ua: req.headers['user-agent'] || '' });
+          const r = await svc.handle({ token: cookieOf(req, 'rs_sid'), method: body.m, args: body.a, ip: clientIp(req), ua: req.headers['user-agent'] || '', device: req.headers['x-rs-device'] || '' });
           const sec = isHttps(req) ? '; Secure' : '';
           if (r.setToken) headers['Set-Cookie'] = `rs_sid=${r.setToken}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${r.cookieMaxAge || 604800}${sec}`;
           if (r.clearToken) headers['Set-Cookie'] = `rs_sid=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0${sec}`;

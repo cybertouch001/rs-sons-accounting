@@ -1,11 +1,11 @@
 {
   "name": "rs-sons-accounting-server",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "R&S Sons Accounting multi-user server (self-hosted)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/api.test.js && node test/v21.test.js && node test/v22.test.js && node test/v23.test.js",
+    "test": "node test/api.test.js && node test/v21.test.js && node test/v22.test.js && node test/v23.test.js && node test/v24.test.js",
     "build-worker": "node build-worker.mjs"
   },
   "license": "UNLICENSED",

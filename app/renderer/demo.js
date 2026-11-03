@@ -25,7 +25,7 @@ window.seedDemo = async function () {
   const cc = await loadCache(true); const nos = cc.units.find(u => u.name === 'Nos').id;
   const sk = await C('saveSimple', 'item_groups', { name: 'Skin Care' }); const pk = await C('saveSimple', 'item_groups', { name: 'Packaging' });
   const I = {};
-  I.serum = await C('saveItem', { name: 'Vitamin C Serum 30ml', group_id: sk, unit_id: nos, hsn: '33049990', gst_rate: 18, sale_rate: 450, purchase_rate: 200, mrp: 599, opening_qty: 120, opening_rate: 200, min_stock: 50, max_stock: 400, barcode: '8901234567890', batch_wise: 1, brand: 'Avermontis' });
+  I.serum = await C('saveItem', { name: 'Vitamin C Serum 30ml', group_id: sk, unit_id: nos, hsn: '33049990', gst_rate: 18, sale_rate: 450, purchase_rate: 200, mrp: 599, opening_qty: 120, opening_rate: 200, min_stock: 50, max_stock: 400, barcode: '8901234567890', batch_wise: 1, brand: 'Herbal Glow' });
   I.cream = await C('saveItem', { name: 'Face Cream 50g', group_id: sk, unit_id: nos, hsn: '33049910', gst_rate: 18, sale_rate: 300, purchase_rate: 150, mrp: 399, opening_qty: 60, opening_rate: 150, min_stock: 30 });
   I.wash = await C('saveItem', { name: 'Face Wash 100ml', group_id: sk, unit_id: nos, hsn: '34013090', gst_rate: 18, sale_rate: 180, purchase_rate: 90, mrp: 249, opening_qty: 80, opening_rate: 90, min_stock: 40 });
   I.bottle = await C('saveItem', { name: 'Glass Dropper Bottle 30ml', group_id: pk, unit_id: nos, hsn: '70109000', gst_rate: 12, sale_rate: 15, purchase_rate: 10, opening_qty: 600, opening_rate: 10, min_stock: 300 });

@@ -6,7 +6,9 @@ const READ = new Set(['settings', 'fyList', 'groups', 'ledgers', 'ledger', 'list
   'itemAnalysis', 'partyAnalysis', 'salesmanReport', 'outstanding', 'interestReport', 'cashFlow', 'ratios', 'budgetReport', 'budgets', 'costCentreReport', 'brs', 'tdsReport', 'depreciationChart', 'payrollCompute', 'payrollRuns', 'salaryRegister',
   'auditLog', 'auditDetail', 'verifyData', 'dashboard', 'gstr1', 'gstr1Json', 'gstr3b', 'gstr3bJson', 'gstSummary', 'einvoiceJson', 'ewayJson', 'stockValuation', 'placeIsInter', 'hsnLookup',
   // v2.0 automation
-  'itrProfile', 'itrBooks', 'itrCompute', 'itrSheet', 'gstr2bList', 'gstr2bRecon', 'bankStatements', 'bankLines', 'recurringList', 'recurringDue', 'dueDates', 'taxRules']);
+  'itrProfile', 'itrBooks', 'itrCompute', 'itrSheet', 'gstr2bList', 'gstr2bRecon', 'bankStatements', 'bankLines', 'recurringList', 'recurringDue', 'dueDates', 'taxRules',
+  // v2.4
+  'unitsUsage', 'dupBills', 'numberGaps']);
 const WRITE = new Set(['saveGroup', 'saveLedger', 'saveSimple', 'savePriceListItems', 'saveBom', 'saveItem', 'saveVoucher', 'duplicateVoucher', 'setVoucherStatus', 'setBankDate', 'saveBudget', 'postDepreciation', 'payrollProcess',
   // v2.0 automation
   'saveItrProfile', 'gstr2bImport', 'bankImport', 'bankRematch', 'bankMatch', 'bankUnmatch', 'bankCreateVoucher', 'saveRecurring', 'runRecurring']);

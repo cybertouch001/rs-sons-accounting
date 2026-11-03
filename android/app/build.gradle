@@ -10,8 +10,8 @@ android {
         applicationId 'bot.tab.sites.rssons'
         minSdk 23
         targetSdk 34
-        versionCode 230
-        versionName '2.3.0'
+        versionCode 240
+        versionName '2.4.0'
         buildConfigField 'boolean', 'WEB_DEBUG', (System.getenv('RS_WEBDEBUG') == '1' ? 'true' : 'false')   // test builds only
         manifestPlaceholders = [cleartext: (System.getenv('RS_WEBDEBUG') == '1' ? 'true' : 'false')]   // plain http only in test builds
         buildConfigField 'String', 'SERVER', '"' + (System.getenv('RS_SERVER') ?: 'https://rs-sons-accounting.sites.tab.bot') + '"'

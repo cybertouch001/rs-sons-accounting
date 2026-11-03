@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.4.0 (3 Nov 2026): units inline, remove users, logged-in devices
+
+**Units**
+- Item screen: the Unit drop-down has "+ Create new unit…" (and a "+ New unit" link). The unit is saved in the company, so every user of that company sees it at once.
+- Masters › Units: list with "used by N items", edit, delete only when no item uses it (the message names the items). Duplicate names are refused; GST UQC list; decimals 0–4.
+
+**Remove / kick a user**
+- Users › Remove user… (also on Logged-in Devices): deactivate (can be re-activated) or delete. Every session of that user is ended on the server immediately; open apps return to the login screen within seconds and show the reason.
+- Deactivating a user or resetting their password from the user form also logs them out everywhere.
+- Note: desktop Offline mode (data on that PC only) is not affected; it never uses server logins.
+
+**Logged-in devices**
+- Utilities › Logged-in Devices (admin): per user, each session with app type (Windows / Android / browser) and version, device name, OS, IP, approximate place, login time, last active; "Log out this device", "Log out all devices"; login history.
+- Utilities › My Devices for every user (log out other devices).
+- Apps send a device name (Windows: PC name; Android: maker + model). Sessions table gets client/device/geo columns (backward-compatible migration, system data copied to storage first). Schema version 24.
+
+**From the feature catalogue (see docs/PDF-GAP.md)**
+- Duplicate supplier bill warning on save + Duplicate Bills Check report; Voucher Number Gaps report.
+- Active / inactive ledgers and items (inactive = hidden from new entries).
+- Master lists: click a heading to sort; "⬇ Excel" exports the list as shown.
+
 ## 2.3.0 (2 Nov 2026): English only, Forgot password, PDF for viewers
 
 **English only**

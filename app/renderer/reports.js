@@ -6,6 +6,7 @@ const REPORT_FILTERS = {
   register: ['period', 'vtypeReq'], monthlySummary: ['period'], stockSummary: ['period'], itemLedger: ['period', 'item'], godownStock: ['asOn'], batchStock: ['asOn'], reorderReport: ['asOn'], slowMoving: ['asOn'],
   itemAnalysis: ['period', 'side'], partyAnalysis: ['period', 'side'], salesmanReport: ['period'], outstanding: ['asOn', 'kind', 'byDue', 'detail'], interestReport: ['asOn', 'rate'], cashFlow: ['period'], ratios: ['period'], budgetReport: ['period'],
   costCentreReport: ['period'], brs: ['asOn', 'bankLedger', 'all'], tdsReport: ['period', 'tdsKind'], depreciationChart: ['asOn'], salaryRegister: ['month'], auditLog: ['period'], gstr1: ['period', 'gstSection'], gstr3b: ['period'], gstSummary: ['period'], groupSummary: ['period'],
+  dupBills: ['period'], numberGaps: ['asOn'],
 };
 const PERIOD_PRESETS = () => { const fy = fyRange(); const t = APP.date; const m0 = t.slice(0, 8) + '01'; const pm = new Date(Date.parse(m0) - 86400000).toISOString().slice(0, 10);
   const q = (() => { const m = +t.slice(5, 7); const qs = m >= 4 && m <= 6 ? ['04', '06'] : m >= 7 && m <= 9 ? ['07', '09'] : m >= 10 && m <= 12 ? ['10', '12'] : ['01', '03']; const y = t.slice(0, 4); const last = new Date(Date.UTC(+y, +qs[1], 0)).toISOString().slice(0, 10); return [`${y}-${qs[0]}-01`, last]; })();

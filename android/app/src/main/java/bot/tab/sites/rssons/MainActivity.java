@@ -362,6 +362,12 @@ public class MainActivity extends Activity {
     /** What the web app may ask of the phone. Only the server's own pages get answers. */
     class Bridge {
         @JavascriptInterface public String version() { return BuildConfig.VERSION_NAME; }
+        // v2.4: shown to the admin in "Logged-in devices" (phone maker + model only)
+        @JavascriptInterface public String deviceName() {
+            String m = android.os.Build.MODEL == null ? "" : android.os.Build.MODEL.trim(), b = android.os.Build.MANUFACTURER == null ? "" : android.os.Build.MANUFACTURER.trim();
+            if (!b.isEmpty() && !m.toLowerCase().startsWith(b.toLowerCase())) m = b.substring(0, 1).toUpperCase() + b.substring(1) + " " + m;
+            return m.length() > 60 ? m.substring(0, 60) : m;
+        }
         @JavascriptInterface public void notify(final String title, final String text) {
             if (!trusted()) return;
             final String t = title == null ? "" : title.length() > 80 ? title.substring(0, 80) : title; final String x = text == null ? "" : text.length() > 300 ? text.substring(0, 300) : text;

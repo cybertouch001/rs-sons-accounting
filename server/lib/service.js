@@ -56,6 +56,38 @@ function createService(env) {
     return { th, s, u };
   }
   function pubUser(u) { return u && { username: u.username, role: u.role, mustChange: !!u.must_change, fullName: u.full_name || '', email: u.email || '', emailOtp: Number(u.otp) !== 0 }; }
+  // ---------- v2.4 logged-in devices ----------
+  // What kind of app a session is (Windows app / Android app / web browser) and a readable device name. A v2.4 app sends
+  // x-rs-device (JSON: app, name, os); older apps are recognised from their user-agent.
+  function deviceOf(ua, hdr) {
+    ua = String(ua || ''); let h = {}; try { if (hdr) h = JSON.parse(decodeURIComponent(String(hdr))) || {}; } catch (_) { h = {}; }
+    const client = /RSSonsAndroid\//.test(ua) ? 'android' : /Electron\//.test(ua) ? 'desktop' : (['android', 'desktop', 'web'].includes(h.app) ? h.app : 'web');
+    let os = '';
+    const and = ua.match(/Android\s([\d.]+)/); const win = ua.match(/Windows NT ([\d.]+)/); const ios = ua.match(/(iPhone|iPad).*?OS ([\d_]+)/); const mac = /Mac OS X/.test(ua);
+    if (and) os = 'Android ' + and[1]; else if (win) os = win[1] === '10.0' ? 'Windows 10/11' : win[1] === '6.3' ? 'Windows 8.1' : win[1] === '6.1' ? 'Windows 7' : 'Windows'; else if (ios) os = (ios[1] === 'iPad' ? 'iPadOS ' : 'iOS ') + ios[2].replace(/_/g, '.'); else if (mac) os = 'macOS'; else if (/CrOS/.test(ua)) os = 'ChromeOS'; else if (/Linux/.test(ua)) os = 'Linux';
+    if (h.os && typeof h.os === 'string') os = h.os.slice(0, 40);
+    let name = typeof h.name === 'string' ? h.name.replace(/[^\w .,()@'&+-]/g, '').trim().slice(0, 60) : '';
+    if (!name && and) { const m = ua.match(/Android [\d.]+;\s*(?:[a-z]{2}[-_][A-Za-z]{2};\s*)?([^;)]+?)(?:\s+Build\/[^;)]*)?[;)]/); if (m && !/^(K|wv)$/.test(m[1].trim())) name = m[1].trim().slice(0, 60); }
+    let browser = '';
+    if (client === 'web') browser = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /SamsungBrowser/.test(ua) ? 'Samsung Internet' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
+    const appVer = (ua.match(/RSSonsAndroid\/([\d.]+)/) || ua.match(/rs-sons-accounting\/([\d.]+)/i) || [])[1] || (typeof h.v === 'string' ? h.v.slice(0, 12) : '');
+    return { client, os, name, browser, appVer };
+  }
+  function clientLabel(d) { return d.client === 'android' ? 'Android app' : d.client === 'desktop' ? 'Windows app' : (d.browser ? d.browser + ' (web)' : 'Web browser'); }
+  // sessions.device holds {"n": device name, "o": OS, "v": app version} as JSON (what the app reported at login); a plain string = device name only
+  function packDevice(dv) { return JSON.stringify({ n: dv.name || '', o: dv.os || '', v: dv.appVer || '' }); }
+  function unpackDevice(s) { if (!s) return {}; if (String(s)[0] === '{') { try { const o = JSON.parse(s); return { name: String(o.n || ''), os: String(o.o || ''), appVer: String(o.v || '') }; } catch (_) {} } return { name: String(s) }; }
+  function pubSession(r, curTh, withUser) {
+    const d = Object.assign(deviceOf(r.ua, null), Object.fromEntries(Object.entries(unpackDevice(r.device)).filter(([, v]) => v))); const client = r.client || d.client;
+    const long = Number(r.expires_at) - Number(r.last_seen) > IDLE_MS + 60000;
+    const o = { id: String(r.token_hash).slice(0, 16), client, clientLabel: clientLabel({ client, browser: d.browser }), device: d.name || '', os: d.os, appVer: d.appVer, ip: r.ip || '', place: r.geo || '',
+      loginAt: Number(r.created_at) || 0, lastActive: Number(r.last_seen) || 0, stayLoggedIn: long, current: r.token_hash === curTh, company: r.company_id || '' };
+    if (withUser) Object.assign(o, { username: r.username || '(deleted user)', fullName: r.full_name || '', role: r.role || '', userActive: !!Number(r.active) });
+    return o;
+  }
+  async function liveSessions(rows, now) {   // drop the ones that have already run out (they would not let anyone in anyway)
+    return rows.filter(r => { const long = Number(r.expires_at) - Number(r.last_seen) > IDLE_MS + 60000; return Number(r.expires_at) >= now && now - Number(r.created_at) <= (long ? LONG_MAX_MS : MAX_MS); });
+  }
   function companiesOf(u) { if (!u.companies || u.companies === '*') return '*'; try { const a = JSON.parse(u.companies); return Array.isArray(a) ? a : '*'; } catch (_) { return '*'; } }
   function canSeeCompany(u, id) { const a = companiesOf(u); return a === '*' || a.includes(id); }
 
@@ -107,8 +139,9 @@ function createService(env) {
   }
   async function startSession(ctx, u, remember, how) {
     const token = CR.randomToken(); const th = await CR.sha256Hex(token);
-    await sys.addSession({ token_hash: th, user_id: u.id, now: ctx.now, expires_at: ctx.now + (remember ? LONG_IDLE_MS : IDLE_MS), ip: ctx.ip, ua: ctx.ua });
-    await Promise.all([sys.updateUser(u.id, { last_login: new Date(ctx.now).toISOString() }), sys.log(u.username, (remember ? 'Login (stay logged in)' : 'Login') + (how ? ' · ' + how : ''), '', ctx.ip),
+    const dv = deviceOf(ctx.ua, ctx.device);
+    await sys.addSession({ token_hash: th, user_id: u.id, now: ctx.now, expires_at: ctx.now + (remember ? LONG_IDLE_MS : IDLE_MS), ip: ctx.ip, ua: ctx.ua, client: dv.client, device: packDevice(dv), geo: ctx.geo });
+    await Promise.all([sys.updateUser(u.id, { last_login: new Date(ctx.now).toISOString() }), sys.log(u.username, (remember ? 'Login (stay logged in)' : 'Login') + (how ? ' · ' + how : ''), [clientLabel(dv), dv.name, dv.os, ctx.geo].filter(Boolean).join(' · '), ctx.ip),
       Math.random() < 0.05 ? sys.purgeSessions(ctx.now) : null]);
     ctx.out.setToken = token; ctx.out.cookieMaxAge = Math.round((remember ? LONG_MAX_MS : MAX_MS) / 1000);
     return pubUser(u);
@@ -145,9 +178,12 @@ function createService(env) {
     // req: { token, method, args, ip, ua, now }
     const now = req.now || Date.now();
     const m = String(req.method || ''); const a = Array.isArray(req.args) ? req.args : [];
-    const ctx = { ip: req.ip || '', ua: req.ua || '', now, out: {}, defer: req.defer || null };
+    const ctx = { ip: req.ip || '', ua: req.ua || '', device: req.device || '', geo: req.geo || '', now, out: {}, defer: req.defer || null };
     const sess = await loadSession(req.token, now);
-    if (sess) { ctx.th = sess.th; ctx.user = sess.u; ctx.companyId = sess.s.company_id || null; }
+    if (sess) { ctx.th = sess.th; ctx.user = sess.u; ctx.companyId = sess.s.company_id || null; if (req.device && !sess.s.device && now - Number(sess.s.created_at) < 600000) { const dv = deviceOf(ctx.ua, req.device); if (dv.name) await sys.setSessionDevice(sess.th, { device: packDevice(dv) }).catch(() => {}); } }
+    else if (req.token && typeof req.token === 'string' && req.token.length >= 20) {   // v2.4: was this device logged out by the admin? say so on the login screen
+      try { const k = await sys.kick(await CR.sha256Hex(req.token)); if (k) ctx.kicked = k; } catch (_) {}
+    }
     // v2.1 'batch': several calls in ONE request (one session check, one trip over the internet). The web app sends the
     // calls a screen makes at the same moment (e.g. the 10 master lists when a company opens) this way. Each call is
     // checked exactly like a single call and answers on its own ({ ok, data } or { ok: false, error, code }), in order.
@@ -168,7 +204,10 @@ function createService(env) {
   }
   async function runOne(ctx, m, a) {
     const h = H[m]; if (!h) throw new ApiError('Unknown API ' + m, 'unknown', 404);
-    if (!PUBLIC.has(m) && !ctx.user) throw new ApiError('Please log in again (your session ended).', 'auth', 401);
+    if (!PUBLIC.has(m) && !ctx.user) {
+      if (ctx.kicked) { const e = new ApiError(ctx.kicked.reason || 'You were logged out of this device.', 'auth', 401); e.kicked = true; throw e; }
+      throw new ApiError('Please log in again (your session ended).', 'auth', 401);
+    }
     if (ctx.user && ctx.user.must_change && !PUBLIC.has(m) && !MUSTCHANGE_OK.has(m)) throw new ApiError('Please set a new password first.', 'must_change', 403);
     const r = await h(ctx, ...a);
     return r === undefined ? null : r;
@@ -470,7 +509,8 @@ function createService(env) {
         const others = all.filter(y => y.id !== x.id);
         if (!others.some(y => y.role === 'admin' && y.active) && !(f.role === 'admin' && f.active)) throw new ApiError('At least one active admin is required');
         await sys.updateUser(x.id, f);
-        if (u.password || f.active === 0) await sys.deleteUserSessions(x.id, ctx.th);
+        if (f.active === 0 && x.active) await sys.kickSessions(await sys.userSessions(x.id), ctx.user.username, `Your user "${x.username}" was deactivated by the admin (${ctx.user.username}). Ask your admin if this is a mistake.`, ctx.now);
+        else if (u.password) await sys.kickSessions((await sys.userSessions(x.id)).filter(r => r.token_hash !== ctx.th), ctx.user.username, 'Your password was reset by the admin. Log in with the new password.', ctx.now);
         await sys.log(ctx.user.username, 'User changed', `${x.username}: role ${f.role}${f.active ? '' : ', deactivated'}${u.password ? ', password reset' : ''}${f.email !== undefined ? ', email ' + (f.email ? maskEmail(f.email) : 'removed') : ''}${f.otp !== undefined ? ', OTP ' + (f.otp ? 'on' : 'off') : ''}`, ctx.ip);
       }
       return true;
@@ -479,8 +519,66 @@ function createService(env) {
       need(ctx, 'admin'); const x = await sys.userByName(username); if (!x) return false;
       if (x.id === ctx.user.id) throw new ApiError('You cannot delete yourself');
       const rest = (await sys.users()).filter(y => y.id !== x.id); if (!rest.some(y => y.role === 'admin' && y.active)) throw new ApiError('At least one active admin is required');
-      await sys.deleteUserSessions(x.id, ''); await sys.deleteUser(x.id); await sys.log(ctx.user.username, 'User deleted', x.username, ctx.ip); return true;
+      const n = await sys.kickSessions(await sys.userSessions(x.id), ctx.user.username, `Your user "${x.username}" was removed by the admin (${ctx.user.username}).`, ctx.now);
+      await sys.deleteUser(x.id); await sys.log(ctx.user.username, 'User deleted', `${x.username} (${n} device${n === 1 ? '' : 's'} logged out)`, ctx.ip); return true;
     },
+    // ---- v2.4 remove a user: "deactivate" (keeps the user and its history; can be switched on again) or "delete" — either way every
+    //      device where that user is logged in is logged out at once (the next request from that device is refused, within seconds)
+    'users.remove': async (ctx, username, mode) => {
+      need(ctx, 'admin'); const x = await sys.userByName(username); if (!x) throw new ApiError('No such user');
+      if (x.id === ctx.user.id) throw new ApiError('You cannot remove yourself');
+      if (x.role === 'admin' && x.active) { const rest = (await sys.users()).filter(y => y.id !== x.id); if (!rest.some(y => y.role === 'admin' && y.active)) throw new ApiError('At least one active admin is required'); }
+      const rows = await sys.userSessions(x.id);
+      if (mode === 'delete') {
+        const n = await sys.kickSessions(rows, ctx.user.username, `Your user "${x.username}" was removed by the admin (${ctx.user.username}).`, ctx.now);
+        await sys.deleteUser(x.id); await sys.log(ctx.user.username, 'User removed (deleted)', `${x.username} · ${n} device${n === 1 ? '' : 's'} logged out`, ctx.ip);
+        return { ok: true, mode: 'delete', loggedOut: n };
+      }
+      const n = await sys.kickSessions(rows, ctx.user.username, `Your user "${x.username}" was deactivated by the admin (${ctx.user.username}). Ask your admin if this is a mistake.`, ctx.now);
+      await sys.updateUser(x.id, { active: 0 }); await sys.log(ctx.user.username, 'User removed (deactivated)', `${x.username} · ${n} device${n === 1 ? '' : 's'} logged out`, ctx.ip);
+      return { ok: true, mode: 'deactivate', loggedOut: n };
+    },
+    // ---- v2.4 logged-in devices ----
+    'sessions.list': async (ctx, scope) => {
+      if (!ctx.user) throw new ApiError('Please log in', 'auth', 401);
+      if (scope === 'all') {
+        need(ctx, 'admin');
+        const rows = await liveSessions(await sys.allSessions(), ctx.now);
+        const users = (await sys.users()).map(u => ({ username: u.username, fullName: u.full_name || '', role: u.role, active: !!u.active, lastLogin: u.last_login || '' }));
+        return { now: ctx.now, sessions: rows.map(r => pubSession(r, ctx.th, true)), users };
+      }
+      const rows = await liveSessions(await sys.userSessions(ctx.user.id), ctx.now);
+      return { now: ctx.now, sessions: rows.map(r => pubSession(Object.assign({}, r, { username: ctx.user.username, full_name: ctx.user.full_name, role: ctx.user.role, active: 1 }), ctx.th, true)) };
+    },
+    'sessions.revoke': async (ctx, id) => {
+      if (!ctx.user) throw new ApiError('Please log in', 'auth', 401);
+      const r = await sys.sessionByPublicId(id); if (!r) throw new ApiError('That device is already logged out');
+      const mine = r.user_id === ctx.user.id;
+      if (!mine) need(ctx, 'admin');
+      if (r.token_hash === ctx.th) throw new ApiError('This is the device you are using now — use Logout instead');
+      const owner = mine ? ctx.user : await sys.userById(r.user_id); const dv = deviceOf(r.ua, null);
+      const what = [clientLabel({ client: r.client || dv.client, browser: dv.browser }), unpackDevice(r.device).name || dv.name].filter(Boolean).join(' · ');
+      await sys.kickSessions([r], ctx.user.username, mine ? 'You logged this device out from another device.' : `The admin (${ctx.user.username}) logged you out of this device.`, ctx.now);
+      await sys.log(ctx.user.username, 'Device logged out', `${owner ? owner.username : '?'} · ${what}${r.ip ? ' · IP ' + r.ip : ''}`, ctx.ip);
+      return true;
+    },
+    'sessions.revokeUser': async (ctx, username, keepCurrent) => {
+      if (!ctx.user) throw new ApiError('Please log in', 'auth', 401);
+      const x = username ? await sys.userByName(username) : ctx.user; if (!x) throw new ApiError('No such user');
+      if (x.id !== ctx.user.id) need(ctx, 'admin');
+      const rows = (await sys.userSessions(x.id)).filter(r => r.token_hash !== ctx.th);   // never the device doing it (that one uses Logout)
+      const n = await sys.kickSessions(rows, ctx.user.username, x.id === ctx.user.id ? 'You logged out all your other devices.' : `The admin (${ctx.user.username}) logged you out of all devices.`, ctx.now);
+      await sys.log(ctx.user.username, 'Device logged out (all)', `${x.username} · ${n} device${n === 1 ? '' : 's'}`, ctx.ip);
+      return { loggedOut: n };
+    },
+    'sessions.loginHistory': async (ctx, username) => {
+      if (!ctx.user) throw new ApiError('Please log in', 'auth', 401);
+      if (!PERMS.allowed(ctx.user.role, 'admin')) return sys.loginHistory(60, ctx.user.username);
+      return sys.loginHistory(150, username || null);
+    },
+    // v2.4: a tiny "am I still logged in?" call — the app asks it every few seconds when no company is open (with a company open,
+    // the live-updates call does the same job), so a removed user or a logged-out device leaves within seconds.
+    'auth.ping': async (ctx) => { if (!ctx.user) throw new ApiError('Please log in', 'auth', 401); return { ok: true, at: ctx.now }; },
     // Import users from a v1.1 desktop "system.json" (same password hashes, so they keep their passwords)
     'users.importV1': async (ctx, sysJson) => {
       need(ctx, 'admin'); let j; try { j = typeof sysJson === 'string' ? JSON.parse(sysJson) : sysJson; } catch (_) { throw new ApiError('Not a valid system.json file'); }
@@ -602,6 +700,33 @@ function createService(env) {
     await sys.clearAttempt('u:' + u.username.toLowerCase());
     await sys.setKv('admin_reset_done', cfg.id);
     await sys.log('system', 'Admin password reset (one time, owner request)', u.username + (f.email ? ' · email set ' + maskEmail(f.email) : ''), ''); return true;
+  },
+  // v2.4: one-time deploy operations written into the deploy config (never in the repo): a temporary test user for checking a new
+  // version on the real server, and its removal afterwards. Each op id runs once, ever (deploy_ops table); a provision op past its
+  // expiry does nothing. Everything is written to the admin log.
+  async applyDeployOps(ops) {
+    for (const o of ops || []) {
+      try {
+        if (!o || !o.id || await sys.deployOp(o.id)) continue;
+        if (o.kind === 'provision_user') {
+          if (!o.username || !/^pbkdf2-sha256\$\d+\$[0-9a-f]+\$[0-9a-f]{64}$/.test(String(o.pw || '')) || !ROLES.includes(o.role)) { await sys.addDeployOp(o.id, o.kind, 'invalid'); continue; }
+          if (o.expires && Date.now() > Number(o.expires)) { await sys.addDeployOp(o.id, o.kind, 'expired, not applied'); continue; }
+          if (await sys.userByName(o.username)) { await sys.addDeployOp(o.id, o.kind, 'user exists, not applied'); continue; }
+          await sys.addUser({ username: o.username, pw: o.pw, role: o.role, must_change: false, full_name: o.full_name || 'Temporary test user', otp: false });
+          await sys.addDeployOp(o.id, o.kind, o.username);
+          await sys.log('system', 'Temporary test user created (deploy)', `${o.username} (${o.role}) — ${o.note || 'for testing a new version'}; removed after testing`, '');
+        } else if (o.kind === 'remove_user') {
+          const x = o.username ? await sys.userByName(o.username) : null;
+          if (x && (!o.only_if_provisioned_by || await sys.deployOp(o.only_if_provisioned_by))) {
+            await sys.kickSessions(await sys.userSessions(x.id), 'system', 'This temporary test user was removed.', Date.now());
+            await sys.deleteUser(x.id);
+            await sys.log('system', 'Temporary test user removed (deploy)', x.username, '');
+          }
+          await sys.addDeployOp(o.id, o.kind, x ? x.username : 'not found');
+        } else await sys.addDeployOp(o.id, String(o.kind || ''), 'unknown kind');
+      } catch (e) { try { console.log('deploy op failed', o && o.id, e && e.message); } catch (_) {} }
+    }
+    return true;
   } };
 }
 module.exports = { createService, ApiError };

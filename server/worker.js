@@ -12,7 +12,7 @@ import { sha256 as nobleSha256 } from '@noble/hashes/sha2.js';
 const core = require('../app/core');
 const { SysStore } = require('./lib/sysstore');
 const { createService } = require('./lib/service');
-import { DOWNLOADS, ADMIN_BOOTSTRAP, ADMIN_RESET, VERSION } from './worker-config.js';
+import { DOWNLOADS, ADMIN_BOOTSTRAP, ADMIN_RESET, DEPLOY_OPS, VERSION } from './worker-config.js';
 import { lineReader } from './lib/mailer.js';
 
 let SQLp = null; const getSQL = () => (SQLp = SQLp || initSqlJs());
@@ -115,6 +115,8 @@ function service(env) {
 const SEC = { 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'same-origin', 'Strict-Transport-Security': 'max-age=31536000' };
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-src 'self' blob: data:; frame-ancestors 'self'; base-uri 'none'; form-action 'self'";
 const json = (obj, status = 200, extra = {}) => new Response(JSON.stringify(obj), { status, headers: Object.assign({ 'content-type': 'application/json', 'cache-control': 'no-store' }, SEC, extra) });
+// v2.4: approximate place of a login, from Cloudflare's own lookup of the connecting address (city, region, country) — no outside service
+function geoOf(req) { try { const c = req.cf || {}; return [c.city, c.region, c.country].filter(Boolean).join(', ').slice(0, 80); } catch (_) { return ''; } }
 function cookieOf(req, name) { const h = req.headers.get('cookie') || ''; for (const part of h.split(';')) { const [k, ...v] = part.trim().split('='); if (k === name) return decodeURIComponent(v.join('=')); } return null; }
 
 async function serveDownload(env, req, d) {
@@ -126,7 +128,7 @@ async function serveDownload(env, req, d) {
   return new Response(readable, { headers });
 }
 
-let BOOTED = false, RESET_CHECKED = false;   // checked once per isolate: the admin is created only when no user exists
+let BOOTED = false, RESET_CHECKED = false, OPS_CHECKED = false;   // checked once per isolate: the admin is created only when no user exists
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url); const p = url.pathname;
@@ -139,9 +141,10 @@ export default {
       const { sys, svc } = service(env);
       if (ADMIN_BOOTSTRAP && !BOOTED) { await svc.bootstrapAdmin(ADMIN_BOOTSTRAP.username, ADMIN_BOOTSTRAP.pw, true); BOOTED = true; }
       if (ADMIN_RESET && !RESET_CHECKED) { await svc.applyAdminReset(ADMIN_RESET); RESET_CHECKED = true; }   // v2.3: once per reset id (kv admin_reset_done)
+      if (DEPLOY_OPS && DEPLOY_OPS.length && !OPS_CHECKED) { await svc.applyDeployOps(DEPLOY_OPS); OPS_CHECKED = true; }   // v2.4: each op id once, ever (deploy_ops table)
       let body; try { body = await req.json(); } catch (_) { return json({ ok: false, error: 'Bad JSON' }, 400); }
       try {
-        const r = await svc.handle({ token: cookieOf(req, 'rs_sid'), method: body.m, args: body.a, ip: req.headers.get('cf-connecting-ip') || '', ua: req.headers.get('user-agent') || '', defer: ctx && typeof ctx.waitUntil === 'function' ? p => ctx.waitUntil(p) : null });
+        const r = await svc.handle({ token: cookieOf(req, 'rs_sid'), method: body.m, args: body.a, ip: req.headers.get('cf-connecting-ip') || '', ua: req.headers.get('user-agent') || '', device: req.headers.get('x-rs-device') || '', geo: geoOf(req), defer: ctx && typeof ctx.waitUntil === 'function' ? p => ctx.waitUntil(p) : null });
         const h = {};
         if (r.setToken) h['set-cookie'] = `rs_sid=${r.setToken}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${r.cookieMaxAge || 604800}`;
         if (r.clearToken) h['set-cookie'] = 'rs_sid=; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=0';
